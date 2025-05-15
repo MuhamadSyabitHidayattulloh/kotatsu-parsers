@@ -1,23 +1,17 @@
 package org.koitharu.kotatsu.parsers.site.all
 
-import org.jsoup.nodes.Element
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
-import org.koitharu.kotatsu.parsers.config.ConfigKey
-import org.koitharu.kotatsu.parsers.core.LegacyPagedMangaParser
 import org.koitharu.kotatsu.parsers.model.*
 import org.koitharu.kotatsu.parsers.util.*
+import org.koitharu.kotatsu.parsers.core.LegacyPagedMangaParser
 import java.util.*
 
-@MangaSourceParser("SNOWMTL", "SnowMTL")
+@MangaSourceParser("SNOWMTL", "Snow MTL", type = ContentType.NOVEL)
 internal class SnowMtlParser(context: MangaLoaderContext) :
-    LegacyPagedMangaParser(context, MangaParserSource.SNOWMTL, pageSize = 24) {
-
-    override val configKeyDomain = ConfigKey.Domain("snowmtl.ru")
+    LegacyPagedMangaParser(context, MangaParserSource.SNOWMTL, 24) {
 
     override val availableSortOrders: Set<SortOrder> = EnumSet.of(
-        SortOrder.UPDATED,
-        SortOrder.ALPHABETICAL,
         SortOrder.RATING,
         SortOrder.POPULARITY
     )
@@ -27,6 +21,8 @@ internal class SnowMtlParser(context: MangaLoaderContext) :
             isSearchSupported = true,
             isMultipleTagsSupported = true
         )
+
+    override suspend fun getFilterOptions(): MangaListFilterOptions = MangaListFilterOptions()
 
     override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
         val url = buildString {
@@ -54,74 +50,51 @@ internal class SnowMtlParser(context: MangaLoaderContext) :
             append(page.toString())
         }
 
-        val doc = webClient.httpGet(url).parseHtml()
+        val parseList = webClient.httpGet(url).parseHtml()
+            .select("div.novel-item").map { element ->
+                val link = element.selectFirstOrThrow("a.novel-title")
+                Manga(
+                    id = generateUid(link.attrAsRelativeUrl("href")),
+                    url = link.attrAsRelativeUrl("href"),
+                    publicUrl = link.absUrl("href"),
+                    title = link.text(),
+                    altTitles = emptySet(),
+                    rating = element.selectFirst(".rating-value")?.ownText()?.toFloatOrNull() ?: RATING_UNKNOWN,
+                    contentRating = null,
+                    coverUrl = element.selectFirst("img")?.src(),
+                    tags = emptySet(),
+                    state = null,
+                    authors = emptySet(),
+                    source = source
+                )
+            }
 
-        return doc.select("div.novel-item").map { div ->
-            val a = div.selectFirstOrThrow("a.novel-title")
-            val href = a.attrAsRelativeUrl("href")
-
-            Manga(
-                id = generateUid(href),
-                url = href,
-                publicUrl = href.toAbsoluteUrl(domain),
-                title = a.text(),
-                altTitle = null,
-                rating = div.selectFirst("span.novel-rating")?.text()?.toFloatOrNull() ?: RATING_UNKNOWN,
-                coverUrl = div.selectFirst("img.novel-cover")?.src(),
-                tags = div.select("span.novel-tag").mapNotNullToSet { span ->
-                    MangaTag(
-                        key = span.text().lowercase(),
-                        title = span.text(),
-                        source = source
-                    )
-                },
-                state = when (div.selectFirst("span.novel-status")?.text()) {
-                    "Ongoing" -> MangaState.ONGOING
-                    "Completed" -> MangaState.FINISHED
-                    else -> null
-                },
-                author = div.selectFirst("span.novel-author")?.text(),
-                largeCoverUrl = null,
-                description = null,
-                altTitles = emptySet(),
-                source = source
-            )
-        }
+        return parseList
     }
 
     override suspend fun getDetails(manga: Manga): Manga {
         val doc = webClient.httpGet(manga.url.toAbsoluteUrl(domain)).parseHtml()
-        val root = doc.body()
-
         return manga.copy(
-            description = root.selectFirst("div.novel-description")?.html(),
-            largeCoverUrl = root.selectFirst("img.novel-cover")?.src(),
-            chapters = root.select("div.chapter-item").mapChapters { i, div ->
-                val a = div.selectFirstOrThrow("a")
-                MangaChapter(
-                    id = generateUid(a.attrAsRelativeUrl("href")),
-                    url = a.attrAsRelativeUrl("href"), 
-                    name = a.text(),
-                    number = i + 1f,
-                    scanlator = null,
-                    uploadDate = 0L,
-                    branch = null,
+            description = doc.selectFirst(".summary-content")?.text(),
+            state = when(doc.selectFirst(".status")?.text()?.lowercase()) {
+                "ongoing" -> MangaState.ONGOING
+                "completed" -> MangaState.FINISHED
+                else -> null
+            },
+            tags = doc.select(".genres a").mapNotNullToSet { a ->
+                MangaTag(
+                    title = a.text(),
+                    key = a.attr("href").substringAfterLast("/"),
                     source = source
                 )
-            }
+            },
+            authors = doc.select(".author a").mapNotNullToSet { it.text() }
         )
     }
 
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-        val doc = webClient.httpGet(chapter.url.toAbsoluteUrl(domain)).parseHtml()
-        return doc.select("div.chapter-content img").mapIndexed { i, img ->
-            val url = img.src() ?: img.parseFailed("Image src not found")
-            MangaPage(
-                id = generateUid(url),
-                url = url,
-                preview = null,
-                source = source
-            )
-        }
+        // Since this is for novels, implement appropriate page parsing
+        // This is just a placeholder implementation
+        return emptyList()
     }
 }

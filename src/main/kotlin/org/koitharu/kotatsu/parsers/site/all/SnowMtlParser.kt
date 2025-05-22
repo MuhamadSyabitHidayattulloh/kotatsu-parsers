@@ -47,9 +47,11 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
                 SortOrder.UPDATED -> "?sort_by=recent"
                 else -> "?example"
             }
-            append(sortQuery)            if (page > 1) {
-                append("&page=").append(page)
-            }
+            append(sortQuery)
+if (page > 1) {
+    append("&page=").append(page)
+}
+
             val searchQuery = query.criteria.find { it.field == SearchableField.TITLE_NAME }
             if (searchQuery != null && searchQuery is Match) {
                 append("&q=").append(searchQuery.value)

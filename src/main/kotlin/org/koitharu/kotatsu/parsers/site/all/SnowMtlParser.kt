@@ -4,21 +4,24 @@ import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.model.*
+import org.koitharu.kotatsu.parsers.model.search.MangaSearchQuery
 import org.koitharu.kotatsu.parsers.model.search.MangaSearchQueryCapabilities
 import org.koitharu.kotatsu.parsers.model.search.SearchCapability
 import org.koitharu.kotatsu.parsers.model.search.SearchableField
 import org.koitharu.kotatsu.parsers.model.search.QueryCriteria.Match
 import org.koitharu.kotatsu.parsers.util.*
 import org.koitharu.kotatsu.parsers.core.PagedMangaParser
-import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.exception.ParseException
 import java.util.*
 
+// Add SNOW_MTL to MangaParserSource
+private val SNOW_MTL = MangaParserSource("SNOW_MTL", "SnowMtl", "en", ContentType.OTHER)
+
 private const val PAGE_SIZE = 24
 
-@MangaSourceParser("SNOW_MTL", "SnowMtl", "", ContentType.OTHER)
-internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(context, MangaParserSource.SNOW_MTL, PAGE_SIZE) {
+@MangaSourceParser("SNOW_MTL", "SnowMtl", "en", ContentType.OTHER)
+internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(context, SNOW_MTL, PAGE_SIZE) {
 
     override val configKeyDomain = ConfigKey.Domain("snowmtl.ru")
 
@@ -46,9 +49,8 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
         val url = buildString {
             append("https://")
             append(domain)
-            append("/search")
-            append("?")
-            when (query.sortOrder) {
+            append("/search?")
+            when (query.order) {
                 SortOrder.POPULARITY -> append("sort_by=views")
                 SortOrder.UPDATED -> append("sort_by=recent")
                 else -> append("sort_by=recent")
@@ -58,8 +60,12 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
                 append(page)
             }
             query.criteria.find { it.field == SearchableField.TITLE_NAME }?.let { criteria ->
-                append("&q=")
-                append(criteria.value)
+                when (criteria) {
+                    is Match<*> -> {
+                        append("&q=")
+                        append(criteria.value.toString())
+                    }
+                }
             }
         }
 

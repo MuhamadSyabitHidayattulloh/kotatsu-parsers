@@ -45,7 +45,8 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
         val url = buildString {
             append(domain)
             append("/search")
-            append("?")            when (query.order) {
+            append("?")
+            when (query.order) {
                 SortOrder.POPULARITY -> append("sort_by=views")
                 SortOrder.UPDATED -> append("sort_by=recent")
                 SortOrder.ALPHABETICAL -> append("sort_by=name")

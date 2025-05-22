@@ -18,16 +18,16 @@ import java.util.*
 
 private const val PAGE_SIZE = 24 // Based on the grid layout from the selector
 
-@MangaSourceParser("SNOWMTL", "SnowMtl", "", ContentType.OTHER)
-internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(context, MangaParserSource.SNOWMTL, PAGE_SIZE) {
+@MangaSourceParser("SNOW_MTL", "SnowMtl", "", ContentType.OTHER)
+internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(context, MangaParserSource.SNOW_MTL, PAGE_SIZE) {
 
-    override val configKeyDomain = ConfigKey.Domain("snowmtl.ru")    override val availableSortOrders: Set<SortOrder> = EnumSet.of(
+    override val configKeyDomain = ConfigKey.Domain("snowmtl.ru")
+    
+    override val availableSortOrders: Set<SortOrder> = EnumSet.of(
         SortOrder.UPDATED,
         SortOrder.POPULARITY,
         SortOrder.NEWEST
     )
-
-    override val isMultipleTagsSupported: Boolean = false
     
     override suspend fun getFilterOptions(): MangaListFilterOptions = MangaListFilterOptions()
 
@@ -37,24 +37,19 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
             criteriaTypes = setOf(Match::class),
             isMultiple = false
         )
-    )
-
-    override suspend fun getListPage(query: MangaSearchQuery, page: Int): List<Manga> {
+    )    override suspend fun getListPage(query: MangaSearchQuery, page: Int): List<Manga> {
         val url = buildString {
             append("https://").append(domain).append("/search")
-            val sortQuery = when (query.sortOrder) {
-                SortOrder.POPULARITY -> "?sort_by=views"
-                SortOrder.UPDATED -> "?sort_by=recent"
-                else -> "?example"
+            when (val order = query.sortOrder ?: SortOrder.UPDATED) {
+                SortOrder.POPULARITY -> append("?sort_by=views")
+                SortOrder.UPDATED -> append("?sort_by=recent")
+                else -> append("?example")
             }
-            append(sortQuery)
-if (page > 1) {
-    append("&page=").append(page)
-}
-
-            val searchQuery = query.criteria.find { it.field == SearchableField.TITLE_NAME }
-            if (searchQuery != null && searchQuery is Match) {
-                append("&q=").append(searchQuery.value)
+            if (page > 1) {
+                append("&page=").append(page)
+            }
+            query.criteria.firstOrNull { it is Match && it.field == SearchableField.TITLE_NAME }?.let {
+                append("&q=").append((it as Match).value)
             }
         }.toHttpUrl()
 
@@ -87,21 +82,19 @@ if (page > 1) {
         return manga.copy(
             tags = emptySet(),
             author = null,
-            description = doc.selectFirst("div.description")?.text(),
-            chapters = chaptersRoot.select("li > a").mapIndexed { index, a ->
+            description = doc.selectFirst("div.description")?.text(),            chapters = chaptersRoot.select("li > a").mapIndexed { index, a ->
                 val href = a.attrAsRelativeUrl("href")
+                val chapterNum = (chaptersRoot.select("li > a").size - index).toFloat()
                 MangaChapter(
                     id = generateUid(href),
                     url = href,
-                    chapterNumber = (chaptersRoot.select("li > a").size - index).toFloat(),
-                    name = a.text() ?: "Chapter ${chaptersRoot.select("li > a").size - index}",
-                    number = 0f,
+                    number = chapterNum,
                     volume = 0,
-                    branch = null,
-                    uploadDate = 0L,
-                    scanlator = null,
                     source = source,
-                    title = null
+                    uploadDate = 0L,
+                    title = a.text() ?: "Chapter $chapterNum",
+                    scanlator = null,
+                    branch = null
                 )
             }.reversed()
         )

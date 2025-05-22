@@ -125,7 +125,7 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
         val ratingText = doc.selectFirst("body > div.content > main > section:nth-child(1) > div > div.md\\:ml-8 > p:nth-of-type(4)")?.text()?.trim()
         val statusText = doc.selectFirst("body > div.content > main > section:nth-child(1) > div > div.md\\:ml-8 > p:nth-of-type(5)")?.text()?.trim()
         val tags = doc.select("body > div.content > main > section:nth-child(1) > div > div.md\\:ml-8 > div.flex.flex-wrap.gap-2.mb-4 > span")
-            .mapNotNull { tag =>
+            .mapNotNull { tag ->
                 tag.text().trim().takeUnless { it.isBlank() }?.let {
                     MangaTag(
                         title = it,

@@ -56,10 +56,9 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
                 append("&page=")
                 append(page)
             }
-            query.criteria.find { it.field == SearchableField.TITLE_NAME }?.let { criteria ->
-                when (criteria) {
+            query.criteria.find { it.field == SearchableField.TITLE_NAME }?.let { criteria ->                when (criteria) {
                     is Match -> {
-                        append("&q=")
+                        append("&query=")
                         append(criteria.value.toString())
                     }
                     is Include,
@@ -115,16 +114,14 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
                 branch = null,
                 source = source
             )
-        }
-
-        val title = doc.selectFirst("main > section:nth-child(1) > div > div.md\\:ml-8 > h1")?.text()?.trim()
+        }        val title = doc.selectFirst("main > section:nth-child(1) > div > div.md\\:ml-8 > h1")?.text()?.trim()
         val coverUrl = doc.selectFirst("main > section:nth-child(1) > div > div.flex-shrink-0.md\\:w-1\\/3.mb-4.md\\:mb-0 > img")?.src()
-        val altTitle = doc.selectFirst("body > div.content > main > section:nth-child(1) > div > div.md\\:ml-8 > p:nth-of-type(1)")?.text()?.trim()
-        val author = doc.selectFirst("body > div.content > main > section:nth-child(1) > div > div.md\\:ml-8 > p:nth-of-type(3)")?.text()?.trim()
-        val description = doc.selectFirst("body > div.content > main > section:nth-child(1) > div > div.md\\:ml-8 > p:nth-of-type(2)")?.text()?.trim()
-        val ratingText = doc.selectFirst("body > div.content > main > section:nth-child(1) > div > div.md\\:ml-8 > p:nth-of-type(4)")?.text()?.trim()
-        val statusText = doc.selectFirst("body > div.content > main > section:nth-child(1) > div > div.md\\:ml-8 > p:nth-of-type(5)")?.text()?.trim()
-        val tags = doc.select("body > div.content > main > section:nth-child(1) > div > div.md\\:ml-8 > div.flex.flex-wrap.gap-2.mb-4 > span")
+        val altTitle = doc.selectFirst("main > section:nth-child(1) > div > div.md\\:ml-8 > p.text-gray-400")?.text()?.trim()
+        val author = doc.selectFirst("main > section:nth-child(1) > div > div.md\\:ml-8 > p:contains(Author)")?.text()?.substringAfter("Author:")?.trim()
+        val description = doc.selectFirst("main > section:nth-child(1) > div > div.md\\:ml-8 > p.mt-4.text-gray-300")?.text()?.trim()
+        val ratingText = doc.selectFirst("main > section:nth-child(1) > div > div.md\\:ml-8 > p:contains(Rating)")?.text()?.trim()
+        val statusText = doc.selectFirst("main > section:nth-child(1) > div > div.md\\:ml-8 > p:contains(Status)")?.text()?.substringAfter("Status:")?.trim()
+        val tags = doc.select("main > section:nth-child(1) > div > div.md\\:ml-8 > div.flex.flex-wrap.gap-2 > a")
             .mapNotNull { tag ->
                 tag.text().trim().takeUnless { it.isBlank() }?.let {
                     MangaTag(
@@ -133,11 +130,9 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
                         source = source,
                     )
                 }
-            }.toSet()
-
-        val rating = ratingText?.let {
+            }.toSet()        val rating = ratingText?.let {
             try {
-                val ratingValue = it.substringBefore("/").trim().toFloat()
+                val ratingValue = it.substringAfter("Rating:").substringBefore("/").trim().toFloat()
                 (ratingValue / 5f).coerceIn(0f, 1f)
             } catch (e: NumberFormatException) {
                 RATING_UNKNOWN

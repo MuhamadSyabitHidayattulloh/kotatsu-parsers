@@ -107,10 +107,10 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
 
             MangaChapter(
                 id = generateUid(href),
-                url = href,
-                name = title,
+                title = title,
                 number = number,
                 volume = 0,
+                url = href,
                 scanlator = null,
                 uploadDate = 0L,
                 branch = null,

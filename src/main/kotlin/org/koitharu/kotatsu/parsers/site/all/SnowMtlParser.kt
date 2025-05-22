@@ -20,7 +20,8 @@ private const val PAGE_SIZE = 24
 @MangaSourceParser("SNOW_MTL", "SnowMtl", "en", ContentType.OTHER)
 internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(context, MangaParserSource.SNOW_MTL, PAGE_SIZE) {
 
-    override val configKeyDomain = ConfigKey.Domain("snowmtl.ru")    override val availableSortOrders: Set<SortOrder> = EnumSet.of(
+    override val configKeyDomain = ConfigKey.Domain("snowmtl.ru")
+    override val availableSortOrders: Set<SortOrder> = EnumSet.of(
         SortOrder.UPDATED,
         SortOrder.POPULARITY,
         SortOrder.ALPHABETICAL,

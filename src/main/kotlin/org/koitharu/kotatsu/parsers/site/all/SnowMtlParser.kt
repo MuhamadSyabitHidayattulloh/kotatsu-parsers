@@ -27,15 +27,15 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
         SortOrder.UPDATED,
         SortOrder.POPULARITY,
         SortOrder.NEWEST
-    )
-
-    override val searchQueryCapabilities = MangaSearchQueryCapabilities(
+    )    override val searchQueryCapabilities = MangaSearchQueryCapabilities(
         SearchCapability(
             field = SearchableField.TITLE_NAME,
             criteriaTypes = setOf(Match::class),
             isMultiple = false,
         )
-    )    override suspend fun getListPage(query: MangaSearchQuery, page: Int): List<Manga> {
+    )
+
+    override suspend fun getListPage(query: MangaSearchQuery, page: Int): List<Manga> {
         val url = buildString {
             append("https://").append(domain).append("/search")
             val sortQuery = when (query.sortOrder) {

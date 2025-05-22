@@ -122,9 +122,8 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
 
         val authorDiv = doc.selectFirst("div.author-info")
         val author = authorDiv?.text()?.trim()
-        
-        val tagsDiv = doc.selectFirst("div.tags")
-        val tags = tagsDiv?.select("a")?.mapNotNull { a =>
+          val tagsDiv = doc.selectFirst("div.tags")
+        val tags = tagsDiv?.select("a")?.mapNotNull { a ->
             val tagName = a.text().trim()
             MangaTag(
                 title = tagName,
@@ -142,8 +141,7 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
     }
 
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-        val doc = webClient.httpGet(chapter.url.toAbsoluteUrl(domain)).parseHtml()
-        return doc.select("div.reader-images img").mapNotNull { img =>
+        val doc = webClient.httpGet(chapter.url.toAbsoluteUrl(domain)).parseHtml()        return doc.select("div.reader-images img").mapNotNull { img ->
             val url = img.absUrl("src").takeIf { it.isNotEmpty() } ?: img.absUrl("data-src")
             MangaPage(
                 id = generateUid(url),

@@ -42,23 +42,26 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
         throw ParseException("Failed to parse manga page", url, cause)
     }
 
-    override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
-        val url = urlBuilder()
-            .host(domain)
-            .addPathSegment("search")
-            .apply {
-                when (order) {
-                    SortOrder.POPULARITY -> addQueryParameter("sort_by", "views")
-                    SortOrder.UPDATED -> addQueryParameter("sort_by", "recent")
-                    else -> addQueryParameter("sort_by", "recent")
-                }
-                if (page > 1) {
-                    addQueryParameter("page", page.toString())
-                }
-                if (!filter.query.isNullOrEmpty()) {
-                    addQueryParameter("q", filter.query)
-                }
-            }.build()
+    override suspend fun getListPage(query: MangaSearchQuery, page: Int): List<Manga> {
+        val url = buildString {
+            append("https://")
+            append(domain)
+            append("/search")
+            append("?")
+            when (query.sortOrder) {
+                SortOrder.POPULARITY -> append("sort_by=views")
+                SortOrder.UPDATED -> append("sort_by=recent")
+                else -> append("sort_by=recent")
+            }
+            if (page > 1) {
+                append("&page=")
+                append(page)
+            }
+            query.criteria.find { it.field == SearchableField.TITLE_NAME }?.let { criteria ->
+                append("&q=")
+                append(criteria.value)
+            }
+        }
 
         return webClient.httpGet(url)
             .parseHtml()
@@ -87,12 +90,13 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
     override suspend fun getDetails(manga: Manga): Manga {
         val doc = webClient.httpGet(manga.url.toAbsoluteUrl(domain)).parseHtml()
 
-        val chaptersRoot = doc.selectFirst("div.chapter-list") ?: throw ParseException("Chapters not found", manga.url)
-        val chapters = chaptersRoot.select("div.chapter-item").mapChapters { div ->
-            val link = div.selectFirst("a") ?: throw ParseException("Chapter link not found", manga.url)
+        val chaptersRoot = doc.selectFirst("section.bg-gray-800.rounded-lg.shadow-md.mt-8.p-6") 
+            ?: throw ParseException("Chapters not found", manga.url)
+            
+        val chapters = chaptersRoot.select("ul > li > a").mapIndexed { index, link ->
             val href = link.attrAsRelativeUrl("href")
             val title = link.text()
-            val number = title.substringAfter("Chapter ").substringBefore(" ").toFloatOrNull() ?: 0f
+            val number = title.substringAfter("Chapter ").substringBefore(" ").toFloatOrNull() ?: (index + 1).toFloat()
 
             MangaChapter(
                 id = generateUid(href),
@@ -107,37 +111,47 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
             )
         }
 
-        val authorDiv = doc.selectFirst("div.author-info")
-        val author = authorDiv?.text()?.trim()
-
-        val tagsDiv = doc.selectFirst("div.tags")
-        val tags = tagsDiv?.select("a")?.mapNotNull { a ->
-            val tagName = a.text().trim()
-            MangaTag(
-                title = tagName,
-                key = tagName.lowercase(),
-                source = source
-            )
-        }?.toSet() ?: emptySet()
+        val title = doc.selectFirst("main > section:nth-child(1) > div > div.md\\:ml-8 > h1")?.text()?.trim()
+        val coverUrl = doc.selectFirst("main > section:nth-child(1) > div > div.flex-shrink-0.md\\:w-1\\/3.mb-4.md\\:mb-0 > img")?.src()
 
         return manga.copy(
-            authors = setOfNotNull(author),
-            tags = tags,
-            description = doc.selectFirst("div.description")?.text()?.trim(),
+            title = title ?: manga.title,
+            coverUrl = coverUrl ?: manga.coverUrl,
             chapters = chapters
         )
     }
 
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
         val doc = webClient.httpGet(chapter.url.toAbsoluteUrl(domain)).parseHtml()
-        return doc.select("div.reader-images img").mapNotNull { img ->
-            val url = img.absUrl("src").takeIf { it.isNotEmpty() } ?: img.absUrl("data-src")
-            MangaPage(
-                id = generateUid(url),
-                url = url,
-                preview = null,
-                source = source
-            )
+        
+        return buildList {
+            doc.select("#comic-images-container > div").forEach { div ->
+                div.selectFirst("img")?.let { img ->
+                    val url = img.absUrl("src").takeIf { it.isNotEmpty() } ?: img.absUrl("data-src")
+                    if (url.isNotEmpty()) {
+                        add(MangaPage(
+                            id = generateUid(url),
+                            url = url,
+                            preview = null,
+                            source = source
+                        ))
+                    }
+                }
+                
+                div.selectFirst("div:nth-child(2)")?.let { textDiv ->
+                    val text = textDiv.text()
+                    if (text.isNotEmpty()) {
+                        // Convert text to image using a data URL
+                        val dataUrl = "data:text/plain;base64," + java.util.Base64.getEncoder().encodeToString(text.toByteArray())
+                        add(MangaPage(
+                            id = generateUid(dataUrl),
+                            url = dataUrl,
+                            preview = null,
+                            source = source
+                        ))
+                    }
+                }
+            }
         }
     }
 }

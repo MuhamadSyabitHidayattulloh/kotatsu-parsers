@@ -18,16 +18,16 @@ import java.util.*
 
 private const val PAGE_SIZE = 24 // Based on the grid layout from the selector
 
-@MangaSourceParser("SNOWMTL", "SnowMtl")
+@MangaSourceParser("SNOWMTL", "SnowMtl", "", ContentType.OTHER)
 internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(context, MangaParserSource.SNOWMTL, PAGE_SIZE) {
 
-    override val configKeyDomain = ConfigKey.Domain("snowmtl.ru")
-
-    override val availableSortOrders: Set<SortOrder> = EnumSet.of(
+    override val configKeyDomain = ConfigKey.Domain("snowmtl.ru")    override val availableSortOrders: Set<SortOrder> = EnumSet.of(
         SortOrder.UPDATED,
         SortOrder.POPULARITY,
         SortOrder.NEWEST
     )
+
+    override val isMultipleTagsSupported: Boolean = false
     
     override suspend fun getFilterOptions(): MangaListFilterOptions = MangaListFilterOptions()
 
@@ -76,14 +76,13 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
                     isNsfw = source.contentType == ContentType.HENTAI
                 )
             }
-    }
-
-    override suspend fun getDetails(manga: Manga): Manga {
+    }    override suspend fun getDetails(manga: Manga): Manga {
         val doc = webClient.httpGet(manga.url.toAbsoluteUrl(domain)).parseHtml()
         
         val chaptersRoot = doc.selectFirst("section.bg-gray-800.rounded-lg.shadow-md.mt-8.p-6 > div.overflow-y-auto.max-h-\\[500px\\] > ul")
             ?: throw ParseException("Chapters list not found", manga.url)
-              return manga.copy(
+        
+        return manga.copy(
             tags = emptySet(),
             author = null,
             description = doc.selectFirst("div.description")?.text(),

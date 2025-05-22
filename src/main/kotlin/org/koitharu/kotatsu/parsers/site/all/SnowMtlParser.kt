@@ -22,57 +22,68 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
 
     override val configKeyDomain = ConfigKey.Domain("snowmtl.ru")
 
-    override val availableSortOrders: Set<SortOrder> = EnumSet.of(
+    override val availableSortOrders: Set<SortOrder> = setOf(
         SortOrder.UPDATED,
-        SortOrder.POPULARITY,
-        SortOrder.NEWEST
+        SortOrder.POPULARITY
     )
 
-    override suspend fun getFilterOptions(): MangaListFilterOptions = MangaListFilterOptions()
-
-    override val searchQueryCapabilities = MangaSearchQueryCapabilities(
-        SearchCapability(
-            field = SearchableField.TITLE_NAME,
-            criteriaTypes = setOf(Match::class),
-            isMultiple = false
-        )
-    )
+    override val isSearchAvailable: Boolean = false
 
     private fun throwParseException(url: String, cause: Exception? = null): Nothing {
         throw ParseException("Failed to parse manga page", url, cause)
     }
 
-    override suspend fun getListPage(query: MangaSearchQuery, page: Int): List<Manga> {
+    override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
+        val doc = webClient.httpGet(chapter.url).parseHtml()
+        
+        // Get the script content that contains the chapter data
+        val scriptContent = doc.select("script").firstOrNull { it.data().contains("window.__NUXT__") }?.data() ?: throw ParseException("Chapter data not found")
+        
+        // Extract image URLs from the script content
+        val imageUrls = scriptContent.let { script ->
+            val imagesPattern = "\"images\":\\[(.*?)\\]".toRegex()
+            val match = imagesPattern.find(script) ?: throw ParseException("Images data not found")
+            val imagesJson = "[${match.groupValues[1]}]"
+            parseJson(imagesJson).asJsonArray.map { it.asString }
+        }
+
+        return imageUrls.mapIndexed { i, url ->
+            MangaPage(
+                id = generateUid(url),
+                url = url,
+                number = i,
+                source = source
+            )
+        }
+    }
+
+    override suspend fun getList(offset: Int, query: String?, sortOrder: SortOrder): List<Manga> {
+        if (query != null) {
+            throw IllegalArgumentException("Search is not supported")
+        }
+
         val url = buildString {
-            append("https://")
-            append(domain)
-            append("/search")
-            append("?")
-            when (query.order) {
-                SortOrder.POPULARITY -> append("sort_by=views")
-                SortOrder.UPDATED -> append("sort_by=recent")
-                else -> append("sort_by=recent")
+            append("$domainUrl/mangas")
+            when (sortOrder) {
+                SortOrder.UPDATED -> append("/last-update")
+                SortOrder.POPULARITY -> append("/popular")
+                else -> append("/last-update")  // fallback to updated
             }
-            if (page > 1) {
-                append("&page=")
-                append(page)
-            }
-            query.criteria.find { it.field == SearchableField.TITLE_NAME }?.let { criteria ->
-                when (criteria) {
-                    is Match -> {
-                        append("&q=")
-                        append(criteria.value.toString())
-                    }
-                    is Include,
-                    is Exclude,
-                    is Range -> Unit // Not supported for this field
-                }
+            if (offset > 0) {
+                append("?page=${(offset / PAGE_SIZE) + 1}")
             }
         }
 
-        return webClient.httpGet(url)
-            .parseHtml()
-            .select("div.grid.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-3.xl\\:grid-cols-4.gap-8.p-6 > div")
+        val doc = webClient.httpGet(url).parseHtml()
+        return parseMangaList(doc)
+    }
+
+    private fun parseJson(json: String): JsonElement {
+        return Json.parseToJsonElement(json)
+    }
+
+    private fun parseMangaList(doc: Document): List<Manga> {
+        return doc.select("div.grid.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-3.xl\\:grid-cols-4.gap-8.p-6 > div")
             .map { div ->
                 val href = div.selectFirst("a")?.attrAsRelativeUrl("href")
                     ?: throw ParseException("Link not found", div.baseUri())
@@ -126,39 +137,5 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
             coverUrl = coverUrl ?: manga.coverUrl,
             chapters = chapters
         )
-    }
-
-    override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-        val doc = webClient.httpGet(chapter.url.toAbsoluteUrl(domain)).parseHtml()
-        
-        return buildList {
-            doc.select("#comic-images-container > div").forEach { div ->
-                div.selectFirst("img")?.let { img ->
-                    val url = img.absUrl("src").takeIf { it.isNotEmpty() } ?: img.absUrl("data-src")
-                    if (url.isNotEmpty()) {
-                        add(MangaPage(
-                            id = generateUid(url),
-                            url = url,
-                            preview = null,
-                            source = source
-                        ))
-                    }
-                }
-                
-                div.selectFirst("div:nth-child(2)")?.let { textDiv ->
-                    val text = textDiv.text()
-                    if (text.isNotEmpty()) {
-                        // Convert text to image using a data URL
-                        val dataUrl = "data:text/plain;base64," + java.util.Base64.getEncoder().encodeToString(text.toByteArray())
-                        add(MangaPage(
-                            id = generateUid(dataUrl),
-                            url = dataUrl,
-                            preview = null,
-                            source = source
-                        ))
-                    }
-                }
-            }
-        }
     }
 }

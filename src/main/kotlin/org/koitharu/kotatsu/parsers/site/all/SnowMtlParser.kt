@@ -4,7 +4,6 @@ import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.model.*
-import org.koitharu.kotatsu.parsers.model.search.MangaSearchQuery
 import org.koitharu.kotatsu.parsers.model.search.MangaSearchQueryCapabilities
 import org.koitharu.kotatsu.parsers.model.search.SearchCapability
 import org.koitharu.kotatsu.parsers.model.search.SearchableField
@@ -16,13 +15,14 @@ import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.exception.ParseException
 import java.util.*
 
-private const val PAGE_SIZE = 24 // Based on the grid layout from the selector
+private const val PAGE_SIZE = 24
 
 @MangaSourceParser("SNOW_MTL", "SnowMtl", "", ContentType.OTHER)
 internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(context, MangaParserSource.SNOW_MTL, PAGE_SIZE) {
 
     override val configKeyDomain = ConfigKey.Domain("snowmtl.ru")
-      override val availableSortOrders: Set<SortOrder> = EnumSet.of(
+
+    override val availableSortOrders: Set<SortOrder> = EnumSet.of(
         SortOrder.UPDATED,
         SortOrder.POPULARITY,
         SortOrder.NEWEST
@@ -40,7 +40,9 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
 
     private fun throwParseException(url: String, cause: Exception? = null): Nothing {
         throw ParseException("Failed to parse manga page", url, cause)
-    }    override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
+    }
+
+    override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
         val url = urlBuilder()
             .host(domain)
             .addPathSegment("search")
@@ -59,28 +61,12 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
             }.build()
 
         return webClient.httpGet(url)
-            .parseHtml()            .select("div.grid.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-3.xl\\:grid-cols-4.gap-8.p-6 > div")
+            .parseHtml()
+            .select("div.grid.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-3.xl\\:grid-cols-4.gap-8.p-6 > div")
             .map { div ->
-                val a = div.selectFirst("a") ?: throw ParseException("Link not found", div.baseUri())
-                val href = a.attrAsRelativeUrl("href")
-                val cover = div.selectFirst("img")?.absUrl("src").orEmpty()
-                val title = a.text()
-                
-                Manga(
-                    id = generateUid(href),
-                    url = href,
-                    publicUrl = href.toAbsoluteUrl(domain),
-                    title = title,
-                    altTitle = null,
-                    coverUrl = cover,
-                    tags = emptySet(),
-                    state = null,
-                    author = null,
-                    rating = RATING_UNKNOWN,
-                    isNsfw = false,
-                    source = source,
-                )
-                val href = div.selectFirst("a")?.attrAsRelativeUrl("href") ?: div.throwParseException("Link not found")
+                val href = div.selectFirst("a")?.attrAsRelativeUrl("href")
+                    ?: throw ParseException("Link not found", div.baseUri())
+
                 Manga(
                     id = generateUid(href),
                     url = href,
@@ -94,19 +80,20 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
                     state = null,
                     source = source,
                     isNsfw = source.contentType == ContentType.HENTAI
-                )            }
+                )
+            }
     }
 
     override suspend fun getDetails(manga: Manga): Manga {
         val doc = webClient.httpGet(manga.url.toAbsoluteUrl(domain)).parseHtml()
-        
+
         val chaptersRoot = doc.selectFirst("div.chapter-list") ?: throw ParseException("Chapters not found", manga.url)
         val chapters = chaptersRoot.select("div.chapter-item").mapChapters { div ->
             val link = div.selectFirst("a") ?: throw ParseException("Chapter link not found", manga.url)
             val href = link.attrAsRelativeUrl("href")
             val title = link.text()
             val number = title.substringAfter("Chapter ").substringBefore(" ").toFloatOrNull() ?: 0f
-            
+
             MangaChapter(
                 id = generateUid(href),
                 url = href,
@@ -122,7 +109,8 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
 
         val authorDiv = doc.selectFirst("div.author-info")
         val author = authorDiv?.text()?.trim()
-          val tagsDiv = doc.selectFirst("div.tags")
+
+        val tagsDiv = doc.selectFirst("div.tags")
         val tags = tagsDiv?.select("a")?.mapNotNull { a ->
             val tagName = a.text().trim()
             MangaTag(
@@ -141,7 +129,8 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
     }
 
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-        val doc = webClient.httpGet(chapter.url.toAbsoluteUrl(domain)).parseHtml()        return doc.select("div.reader-images img").mapNotNull { img ->
+        val doc = webClient.httpGet(chapter.url.toAbsoluteUrl(domain)).parseHtml()
+        return doc.select("div.reader-images img").mapNotNull { img ->
             val url = img.absUrl("src").takeIf { it.isNotEmpty() } ?: img.absUrl("data-src")
             MangaPage(
                 id = generateUid(url),

@@ -150,7 +150,8 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
             "hiatus" -> MangaState.PAUSED
             "dropped" -> MangaState.ABANDONED
             else -> null
-        }        return manga.copy(
+        }
+        return manga.copy(
             title = title ?: manga.title,
             altTitles = setOfNotNull(altTitle),
             authors = setOfNotNull(author),

@@ -22,13 +22,13 @@ private const val PAGE_SIZE = 24 // Based on the grid layout from the selector
 internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(context, MangaParserSource.SNOW_MTL, PAGE_SIZE) {
 
     override val configKeyDomain = ConfigKey.Domain("snowmtl.ru")
-    
-    override val availableSortOrders: Set<SortOrder> = EnumSet.of(
+      override val availableSortOrders: Set<SortOrder> = EnumSet.of(
         SortOrder.UPDATED,
         SortOrder.POPULARITY,
         SortOrder.NEWEST
     )
-      override suspend fun getFilterOptions(): MangaListFilterOptions = MangaListFilterOptions()
+
+    override suspend fun getFilterOptions(): MangaListFilterOptions = MangaListFilterOptions()
 
     override val searchQueryCapabilities = MangaSearchQueryCapabilities(
         SearchCapability(
@@ -38,26 +38,48 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
         )
     )
 
-    override suspend fun getListPage(query: MangaSearchQuery, page: Int): List<Manga> {
-        val url = buildString {
-            append("https://").append(domain).append("/search")
-            when (val order = query.sortOrder ?: SortOrder.UPDATED) {
-                SortOrder.POPULARITY -> append("?sort_by=views")
-                SortOrder.UPDATED -> append("?sort_by=recent")
-                else -> append("?example")
-            }
-            if (page > 1) {
-                append("&page=").append(page)
-            }
-            query.criteria.firstOrNull { it is Match && it.field == SearchableField.TITLE_NAME }?.let {
-                append("&q=").append((it as Match).value)
-            }
-        }.toHttpUrl()
+    private fun throwParseException(url: String, cause: Exception? = null): Nothing {
+        throw ParseException("Failed to parse manga page", url, cause)
+    }    override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
+        val url = urlBuilder()
+            .host(domain)
+            .addPathSegment("search")
+            .apply {
+                when (order) {
+                    SortOrder.POPULARITY -> addQueryParameter("sort_by", "views")
+                    SortOrder.UPDATED -> addQueryParameter("sort_by", "recent")
+                    else -> addQueryParameter("sort_by", "recent")
+                }
+                if (page > 1) {
+                    addQueryParameter("page", page.toString())
+                }
+                if (!filter.query.isNullOrEmpty()) {
+                    addQueryParameter("q", filter.query)
+                }
+            }.build()
 
         return webClient.httpGet(url)
-            .parseHtml()
-            .select("div.grid.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-3.xl\\:grid-cols-4.gap-8.p-6 > div")
+            .parseHtml()            .select("div.grid.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-3.xl\\:grid-cols-4.gap-8.p-6 > div")
             .map { div ->
+                val a = div.selectFirst("a") ?: throw ParseException("Link not found", div.baseUri())
+                val href = a.attrAsRelativeUrl("href")
+                val cover = div.selectFirst("img")?.absUrl("src").orEmpty()
+                val title = a.text()
+                
+                Manga(
+                    id = generateUid(href),
+                    url = href,
+                    publicUrl = href.toAbsoluteUrl(domain),
+                    title = title,
+                    altTitle = null,
+                    coverUrl = cover,
+                    tags = emptySet(),
+                    state = null,
+                    author = null,
+                    rating = RATING_UNKNOWN,
+                    isNsfw = false,
+                    source = source,
+                )
                 val href = div.selectFirst("a")?.attrAsRelativeUrl("href") ?: div.throwParseException("Link not found")
                 Manga(
                     id = generateUid(href),
@@ -78,57 +100,56 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
     override suspend fun getDetails(manga: Manga): Manga {
         val doc = webClient.httpGet(manga.url.toAbsoluteUrl(domain)).parseHtml()
         
-        val chaptersRoot = doc.selectFirst("section.bg-gray-800.rounded-lg.shadow-md.mt-8.p-6 > div.overflow-y-auto.max-h-\\[500px\\] > ul")
-            ?: throw ParseException("Chapters list not found", manga.url)
+        val chaptersRoot = doc.selectFirst("div.chapter-list") ?: throw ParseException("Chapters not found", manga.url)
+        val chapters = chaptersRoot.select("div.chapter-item").mapChapters { div ->
+            val link = div.selectFirst("a") ?: throw ParseException("Chapter link not found", manga.url)
+            val href = link.attrAsRelativeUrl("href")
+            val title = link.text()
+            val number = title.substringAfter("Chapter ").substringBefore(" ").toFloatOrNull() ?: 0f
+            
+            MangaChapter(
+                id = generateUid(href),
+                url = href,
+                name = title,
+                number = number,
+                volume = 0,
+                scanlator = null,
+                uploadDate = 0L,
+                branch = null,
+                source = source
+            )
+        }
+
+        val authorDiv = doc.selectFirst("div.author-info")
+        val author = authorDiv?.text()?.trim()
         
+        val tagsDiv = doc.selectFirst("div.tags")
+        val tags = tagsDiv?.select("a")?.mapNotNull { a =>
+            val tagName = a.text().trim()
+            MangaTag(
+                title = tagName,
+                key = tagName.lowercase(),
+                source = source
+            )
+        }?.toSet() ?: emptySet()
+
         return manga.copy(
-            tags = emptySet(),
-            author = null,
-            description = doc.selectFirst("div.description")?.text(),
-            chapters = chaptersRoot.select("li > a").mapIndexed { index, a ->
-                val href = a.attrAsRelativeUrl("href")
-                val chapterNum = (chaptersRoot.select("li > a").size - index).toFloat()
-                MangaChapter(
-                    id = generateUid(href),
-                    url = href,
-                    number = chapterNum,
-                    volume = 0,
-                    source = source,
-                    uploadDate = 0L,
-                    title = a.text() ?: "Chapter $chapterNum",
-                    scanlator = null,
-                    branch = null
-                )
-            }.reversed()
+            authors = setOfNotNull(author),
+            tags = tags,
+            description = doc.selectFirst("div.description")?.text()?.trim(),
+            chapters = chapters
         )
     }
 
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
         val doc = webClient.httpGet(chapter.url.toAbsoluteUrl(domain)).parseHtml()
-        
-        // We need to evaluate JavaScript to get both image and text content
-        // The comic-images-container has multiple divs, each containing an image and text bubble
-        val pagesScript = """
-            Array.from(document.querySelectorAll('#comic-images-container > div')).map(div => {
-                const img = div.querySelector('img')?.src;
-                const text = div.querySelector('div:nth-child(2)')?.textContent;
-                return img;
-            }).filter(x => x)
-        """.trimIndent()
-        
-        val urls = context.evaluateJs(pagesScript)?.let { result ->
-            result.removeSurrounding("[", "]")
-                .split(",")
-                .map { it.trim().removeSurrounding("\"") }
-                .filter { it.isNotEmpty() }
-        } ?: throw ParseException("Pages not found", chapter.url)
-        
-        return urls.map { url ->
+        return doc.select("div.reader-images img").mapNotNull { img =>
+            val url = img.absUrl("src").takeIf { it.isNotEmpty() } ?: img.absUrl("data-src")
             MangaPage(
                 id = generateUid(url),
                 url = url,
-                source = source,
-                preview = null
+                preview = null,
+                source = source
             )
         }
     }

@@ -19,7 +19,7 @@ import java.util.*
 private const val PAGE_SIZE = 24 // Based on the grid layout from the selector
 
 @MangaSourceParser("SNOWMTL", "SnowMtl")
-internal class SnowMtlParser2(context: MangaLoaderContext) : PagedMangaParser(context, MangaParserSource.SNOWMTL, PAGE_SIZE) {
+internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(context, MangaParserSource.SNOWMTL, PAGE_SIZE) {
 
     override val configKeyDomain = ConfigKey.Domain("snowmtl.ru")
 
@@ -28,6 +28,8 @@ internal class SnowMtlParser2(context: MangaLoaderContext) : PagedMangaParser(co
         SortOrder.POPULARITY,
         SortOrder.NEWEST
     )
+    
+    override suspend fun getFilterOptions(): MangaListFilterOptions = MangaListFilterOptions()
 
     override val searchQueryCapabilities = MangaSearchQueryCapabilities(
         SearchCapability(
@@ -45,12 +47,12 @@ internal class SnowMtlParser2(context: MangaLoaderContext) : PagedMangaParser(co
                 SortOrder.UPDATED -> "?sort_by=recent"
                 else -> "?example"
             }
-            append(sortQuery)
-            if (page > 1) {
+            append(sortQuery)            if (page > 1) {
                 append("&page=").append(page)
             }
-            query.criteria.find { it.field == SearchableField.TITLE_NAME }?.let { criteria ->
-                append("&q=").append(criteria.value)
+            val searchQuery = query.criteria.find { it.field == SearchableField.TITLE_NAME }
+            if (searchQuery != null && searchQuery is Match) {
+                append("&q=").append(searchQuery.value)
             }
         }.toHttpUrl()
 
@@ -81,17 +83,17 @@ internal class SnowMtlParser2(context: MangaLoaderContext) : PagedMangaParser(co
         
         val chaptersRoot = doc.selectFirst("section.bg-gray-800.rounded-lg.shadow-md.mt-8.p-6 > div.overflow-y-auto.max-h-\\[500px\\] > ul")
             ?: throw ParseException("Chapters list not found", manga.url)
-            
-        return manga.copy(
+              return manga.copy(
             tags = emptySet(),
             author = null,
             description = doc.selectFirst("div.description")?.text(),
-            chapters = chaptersRoot.select("li > a").mapChapters { a ->
-                val href = a.attrAsAbsoluteUrl("href")
+            chapters = chaptersRoot.select("li > a").mapIndexed { index, a ->
+                val href = a.attrAsRelativeUrl("href")
                 MangaChapter(
                     id = generateUid(href),
                     url = href,
-                    name = requireNotNull(a.text()) { "Chapter name is missing" },
+                    chapterNumber = (chaptersRoot.select("li > a").size - index).toFloat(),
+                    name = a.text() ?: "Chapter ${chaptersRoot.select("li > a").size - index}",
                     number = 0f,
                     volume = 0,
                     branch = null,
@@ -100,7 +102,7 @@ internal class SnowMtlParser2(context: MangaLoaderContext) : PagedMangaParser(co
                     source = source,
                     title = null
                 )
-            }
+            }.reversed()
         )
     }
 

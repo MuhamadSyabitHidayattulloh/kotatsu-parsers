@@ -114,7 +114,8 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
                 branch = null,
                 source = source
             )
-        }        val title = doc.selectFirst("main > section:nth-child(1) > div > div.md\\:ml-8 > h1")?.text()?.trim()
+        }
+        val title = doc.selectFirst("main > section:nth-child(1) > div > div.md\\:ml-8 > h1")?.text()?.trim()
         val coverUrl = doc.selectFirst("main > section:nth-child(1) > div > div.flex-shrink-0.md\\:w-1\\/3.mb-4.md\\:mb-0 > img")?.src()
         val altTitle = doc.selectFirst("main > section:nth-child(1) > div > div.md\\:ml-8 > p.text-gray-400")?.text()?.trim()
         val author = doc.selectFirst("main > section:nth-child(1) > div > div.md\\:ml-8 > p:contains(Author)")?.text()?.substringAfter("Author:")?.trim()
@@ -130,7 +131,8 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
                         source = source,
                     )
                 }
-            }.toSet()        val rating = ratingText?.let {
+            }.toSet()
+            val rating = ratingText?.let {
             try {
                 val ratingValue = it.substringAfter("Rating:").substringBefore("/").trim().toFloat()
                 (ratingValue / 5f).coerceIn(0f, 1f)

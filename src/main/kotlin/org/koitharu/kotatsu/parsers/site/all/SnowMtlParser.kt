@@ -28,8 +28,7 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
         SortOrder.POPULARITY,
         SortOrder.NEWEST
     )
-    
-    override suspend fun getFilterOptions(): MangaListFilterOptions = MangaListFilterOptions()
+      override suspend fun getFilterOptions(): MangaListFilterOptions = MangaListFilterOptions()
 
     override val searchQueryCapabilities = MangaSearchQueryCapabilities(
         SearchCapability(
@@ -37,7 +36,9 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
             criteriaTypes = setOf(Match::class),
             isMultiple = false
         )
-    )    override suspend fun getListPage(query: MangaSearchQuery, page: Int): List<Manga> {
+    )
+
+    override suspend fun getListPage(query: MangaSearchQuery, page: Int): List<Manga> {
         val url = buildString {
             append("https://").append(domain).append("/search")
             when (val order = query.sortOrder ?: SortOrder.UPDATED) {
@@ -71,9 +72,10 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
                     state = null,
                     source = source,
                     isNsfw = source.contentType == ContentType.HENTAI
-                )
-            }
-    }    override suspend fun getDetails(manga: Manga): Manga {
+                )            }
+    }
+
+    override suspend fun getDetails(manga: Manga): Manga {
         val doc = webClient.httpGet(manga.url.toAbsoluteUrl(domain)).parseHtml()
         
         val chaptersRoot = doc.selectFirst("section.bg-gray-800.rounded-lg.shadow-md.mt-8.p-6 > div.overflow-y-auto.max-h-\\[500px\\] > ul")
@@ -82,7 +84,8 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
         return manga.copy(
             tags = emptySet(),
             author = null,
-            description = doc.selectFirst("div.description")?.text(),            chapters = chaptersRoot.select("li > a").mapIndexed { index, a ->
+            description = doc.selectFirst("div.description")?.text(),
+            chapters = chaptersRoot.select("li > a").mapIndexed { index, a ->
                 val href = a.attrAsRelativeUrl("href")
                 val chapterNum = (chaptersRoot.select("li > a").size - index).toFloat()
                 MangaChapter(

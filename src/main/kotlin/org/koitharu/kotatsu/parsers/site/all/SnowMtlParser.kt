@@ -18,7 +18,7 @@ import java.util.*
 private const val PAGE_SIZE = 24
 
 @MangaSourceParser("SNOW_MTL", "SnowMtl", "en", ContentType.OTHER)
-internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(context, source = ContentType.OTHER, pageSize = PAGE_SIZE) {
+internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(context, MangaParserSource.SNOW_MTL, PAGE_SIZE) {
 
     override val configKeyDomain = ConfigKey.Domain("snowmtl.ru")
 
@@ -48,7 +48,7 @@ internal class SnowMtlParser(context: MangaLoaderContext) : PagedMangaParser(con
             append(domain)
             append("/search")
             append("?")
-            when (query.sortOrder) {
+            when (query.order) {
                 SortOrder.POPULARITY -> append("sort_by=views")
                 SortOrder.UPDATED -> append("sort_by=recent")
                 else -> append("sort_by=recent")

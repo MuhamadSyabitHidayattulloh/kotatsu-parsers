@@ -149,18 +149,47 @@ internal abstract class MTLParser(
         val jsonText = doc.selectFirst("div#json-data")?.text()
             ?: throw ParseException("JSON data not found", chapter.url)
         
-        val imgUrls = Regex(""""img_url":\s*"([^"]+)"""").findAll(jsonText)
-            .map { it.groupValues[1] }
-            .toList()
-        
-        return imgUrls.map { imgUrl ->
-            val fullUrl = "https://$imgUrl"
-            MangaPage(
-                id = generateUid(fullUrl),
-                url = fullUrl,
-                preview = null,
-                source = source,
-            )
+        try {
+            val pages = JSONArray(jsonText)
+            return (0 until pages.length()).map { i =>
+                val page = pages.getJSONObject(i)
+                val imgUrl = page.getString("img_url")
+                val translations = page.optJSONArray("translations")
+                var text = ""
+                
+                if (translations != null) {
+                    for (j in 0 until translations.length()) {
+                        val translation = translations.getJSONObject(j)
+                        if (translation.has("text") && translation.getString("text").isNotEmpty()) {
+                            text += translation.getString("text") + "\n"
+                        }
+                    }
+                }
+                
+                val fullUrl = "https://$imgUrl"
+                MangaPage(
+                    id = generateUid(fullUrl),
+                    url = fullUrl,
+                    preview = null,
+                    source = source,
+                    text = text.trim()
+                )
+            }
+        } catch (e: Exception) {
+            // Fallback to regex parsing if JSON parsing fails
+            val imgUrls = Regex(""""img_url":\s*"([^"]+)"""").findAll(jsonText)
+                .map { it.groupValues[1] }
+                .toList()
+            
+            return imgUrls.map { imgUrl ->
+                val fullUrl = "https://$imgUrl"
+                MangaPage(
+                    id = generateUid(fullUrl),
+                    url = fullUrl,
+                    preview = null,
+                    source = source,
+                )
+            }
         }
     }
 

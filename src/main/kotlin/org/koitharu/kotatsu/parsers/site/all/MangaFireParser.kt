@@ -313,7 +313,6 @@ private suspend fun getChaptersBranch(mangaId: String, branch: ChapterBranch): L
         val volumeUrl = "https://$domain/read/$mangaId/${branch.langCode}/${branch.type}-${mangaId}"
         val doc = webClient.httpGet(volumeUrl).parseHtml()
 
-        val images = doc.select("div.pages img[data-number][src]")
         return listOf(
             MangaChapter(
                 id = generateUid(volumeUrl),
@@ -322,15 +321,9 @@ private suspend fun getChaptersBranch(mangaId: String, branch: ChapterBranch): L
                 volume = doc.selectFirst("body")?.attr("data-number")?.toIntOrNull() ?: 0,
                 url = volumeUrl,
                 scanlator = null,
-                uploadDate = null,
+                uploadDate = 0L,
                 branch = "${branch.langTitle} Volume",
                 source = source,
-                pages = images.mapIndexed { index, img ->
-                    MangaPage(
-                        index = index,
-                        imageUrl = img.attrAsAbsoluteUrl("src")
-                    )
-                }
             )
         )
     }
@@ -458,6 +451,17 @@ private suspend fun getChaptersBranch(mangaId: String, branch: ChapterBranch): L
 	}
 
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
+        if (chapter.branch?.endsWith("Volume") == true) {
+            val doc = webClient.httpGet(chapter.url).parseHtml()
+            return doc.select("div.pages img[data-number][src]").mapIndexed { index, img ->
+                MangaPage(
+                    id = generateUid(img.attrAsAbsoluteUrl("src")),
+                    url = img.attrAsAbsoluteUrl("src"),
+                    preview = null,
+                    source = source,
+                )
+            }
+        }
         val chapterId = chapter.url.substringAfterLast('/')
         val vrf = VrfGenerator.generate("chapter@$chapterId")
 

@@ -298,52 +298,79 @@ internal abstract class MangaFireParser(
 		}
 	}
 
-    private suspend fun getChaptersBranch(mangaId: String, branch: ChapterBranch): List<MangaChapter> {
-        val readVrfInput = "$mangaId@${branch.type}@${branch.langCode}"
-        val readVrf = VrfGenerator.generate(readVrfInput)
+private suspend fun getChaptersBranch(mangaId: String, branch: ChapterBranch): List<MangaChapter> {
+    val readVrfInput = "$mangaId@${branch.type}@${branch.langCode}"
+    val readVrf = VrfGenerator.generate(readVrfInput)
 
-        val response = webClient
-            .httpGet("https://$domain/ajax/read/$mangaId/${branch.type}/${branch.langCode}?vrf=$readVrf")
+    val url = "https://$domain/ajax/read/$mangaId/${branch.type}/${branch.langCode}?vrf=$readVrf"
 
-        val chapterElements = response.parseJson()
-            .getJSONObject("result")
-            .getString("html")
+    val response = webClient.httpGet(url)
+    val json = response.parseJson()
+
+    val html = json.getJSONObject("result").optString("html", null)
+    if (html.isNullOrEmpty()) {
+        // handle if volume mode (no list, only images)
+        val volumeUrl = "https://$domain/read/$mangaId/${branch.langCode}/${branch.type}-${mangaId}"
+        val doc = webClient.httpGet(volumeUrl).parseHtml()
+
+        val images = doc.select("div.pages img[data-number][src]")
+        return listOf(
+            MangaChapter(
+                id = generateUid(volumeUrl),
+                title = "Volume ${branch.langCode.uppercase()}",
+                number = -1f,
+                volume = doc.selectFirst("body")?.attr("data-number")?.toIntOrNull() ?: 0,
+                url = volumeUrl,
+                scanlator = null,
+                uploadDate = null,
+                branch = "${branch.langTitle} Volume",
+                source = source,
+                pages = images.mapIndexed { index, img ->
+                    MangaPage(
+                        index = index,
+                        imageUrl = img.attrAsAbsoluteUrl("src")
+                    )
+                }
+            )
+        )
+    }
+
+    // normal chapter list branch
+    val chapterElements = Jsoup.parseBodyFragment(html).select("ul li a")
+
+    if (branch.type == "chapter") {
+        val extra = webClient.httpGet("https://$domain/ajax/manga/$mangaId/${branch.type}/${branch.langCode}")
+            .parseJson()
+            .getString("result")
             .let(Jsoup::parseBodyFragment)
-            .select("ul li a")
 
-		if (branch.type == "chapter") {
-			val doc = webClient
-				.httpGet("https://$domain/ajax/manga/$mangaId/${branch.type}/${branch.langCode}")
-				.parseJson()
-				.getString("result")
-				.let(Jsoup::parseBodyFragment)
-
-            doc.select("ul li a").withIndex().forEach { (i, it) ->
-                val date = it.select("span").getOrNull(1)?.ownText() ?: ""
-                chapterElements[i].attr("upload-date", date)
-                chapterElements[i].attr("other-title", it.attr("title"))
+        extra.select("ul li a").withIndex().forEach { (i, el) ->
+            val date = el.select("span").getOrNull(1)?.ownText() ?: ""
+            chapterElements.getOrNull(i)?.apply {
+                attr("upload-date", date)
+                attr("other-title", el.attr("title"))
             }
         }
-
-        return chapterElements.mapChapters(reversed = true) { _, it ->
-            val chapterId = it.attr("data-id")
-            MangaChapter(
-                id = generateUid(it.attr("href")),
-                title = it.attr("title").ifBlank {
-                    "${branch.type.toTitleCase()} ${it.attr("data-number")}"
-                },
-                number = it.attr("data-number").toFloatOrNull() ?: -1f,
-                volume = it.attr("other-title").let { title ->
-                    volumeNumRegex.find(title)?.groupValues?.getOrNull(2)?.toInt() ?: 0
-                },
-                url = "$mangaId/${branch.type}/${branch.langCode}/$chapterId",
-                scanlator = null,
-                uploadDate = dateFormat.parseSafe(it.attr("upload-date")),
-                branch = "${branch.langTitle} ${branch.type.toTitleCase()}",
-                source = source,
-            )
-        }
     }
+
+    return chapterElements.mapChapters(reversed = true) { _, el ->
+        val titleAttr = el.attr("title")
+        val volumeMatch = Regex("""Vol\s*\.?\s*(\d+)""", RegexOption.IGNORE_CASE).find(titleAttr)
+        val volumeNum = volumeMatch?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+
+        MangaChapter(
+            id = generateUid(el.attr("href")),
+            title = titleAttr.ifBlank { "${branch.type.toTitleCase()} ${el.attr("data-number")}" },
+            number = el.attr("data-number").toFloatOrNull() ?: -1f,
+            volume = volumeNum,
+            url = el.attr("href"),
+            scanlator = null,
+            uploadDate = dateFormat.parseSafe(el.attr("upload-date")),
+            branch = "${branch.langTitle} ${branch.type.toTitleCase()}",
+            source = source,
+        )
+    }
+}
 
 	private val dateFormat = SimpleDateFormat("MMM dd, yyyy", Locale.ENGLISH)
 	private val volumeNumRegex = Regex("""vol(ume)?\s*(\d+)""", RegexOption.IGNORE_CASE)

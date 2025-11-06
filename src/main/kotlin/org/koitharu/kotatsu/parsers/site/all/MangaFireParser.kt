@@ -192,30 +192,21 @@ internal abstract class MangaFireParser(
      * Pattern: /ajax/read/{mangaId}/{type}/{lang}?vrf=xxx
      */
     private suspend fun extractChapterListVrf(mangaId: String, type: String, langCode: String): String {
-        // Try multiple chapter options in case chapter 1 doesn't exist
-        val chapterOptions = listOf("1", "01", "001", "0", "2", "02") // Try various chapter numbers
+        // Try most common chapter options first for faster loading
+        val chapterOptions = listOf("1", "0", "2") // Optimized: try only most common numbers first
+
+        val mangaIdPart = mangaId.substringAfterLast('.')
 
         for (chapterNum in chapterOptions) {
             try {
-                // Load a chapter page where VRF tokens are actually generated
-                // Keep the full mangaId including the slug part (e.g., kkochi-samkin-jimseung.kx976)
                 val chapterUrl = "https://$domain/read/$mangaId/$langCode/$type-$chapterNum"
-                println("🔍 Extracting chapter list VRF for $mangaId/$type/$langCode from chapter page: $chapterUrl")
 
-                // Extract just the ID part from mangaId (e.g., "kx976" from "kkochi-samkin-jimseung.kx976")
-                val mangaIdPart = mangaId.substringAfterLast('.')
-                println("🔧 Using mangaId part '$mangaIdPart' for AJAX pattern matching (from full '$mangaId')")
-
-                // Capture URLs specifically for this manga's chapter listing pattern
-                // PERFORMANCE OPTIMIZATION: Reduced timeout from 15s to 5s
+                // PERFORMANCE OPTIMIZATION: Reduced timeout from 5s to 2s
                 val vrfUrls = context.captureWebViewUrls(
                     pageUrl = chapterUrl,
                     urlPattern = Regex("/ajax/read/$mangaIdPart/$type/$langCode\\?vrf=([^&]+)"),
-                    timeout = 5000L
+                    timeout = 2000L
                 )
-
-                println("📡 Captured ${vrfUrls.size} URLs matching chapter list VRF pattern for $mangaId")
-                vrfUrls.forEach { url -> println("   🔗 Captured URL: $url") }
 
                 // Extract VRF token from captured URLs
                 val vrf = vrfUrls.firstNotNullOfOrNull { url ->
@@ -223,15 +214,14 @@ internal abstract class MangaFireParser(
                 }
 
                 if (vrf != null) {
-                    println("✅ Chapter list VRF extracted for $mangaId: ${vrf.take(10)}...")
                     return vrf
                 }
 
-                // PERFORMANCE OPTIMIZATION: Reduced fallback timeout from 10s to 3s
+                // PERFORMANCE OPTIMIZATION: Reduced fallback timeout from 3s to 1s
                 val fallbackUrls = context.captureWebViewUrls(
                     pageUrl = chapterUrl,
                     urlPattern = Regex("/ajax/read/[^/]+/$type/$langCode\\?vrf=([^&]+)"),
-                    timeout = 3000L
+                    timeout = 1000L
                 )
 
                 val fallbackVrf = fallbackUrls.firstNotNullOfOrNull { url ->
@@ -239,12 +229,10 @@ internal abstract class MangaFireParser(
                 }
 
                 if (fallbackVrf != null) {
-                    println("✅ Chapter list VRF extracted via fallback for $mangaId: ${fallbackVrf.take(10)}...")
                     return fallbackVrf
                 }
 
             } catch (e: Exception) {
-                println("❌ Failed to extract chapter list VRF from chapter $chapterNum for $mangaId: ${e.message}")
                 // Continue trying other chapter numbers
                 continue
             }
@@ -258,9 +246,6 @@ internal abstract class MangaFireParser(
      * Pattern: /ajax/read/chapter/{chapterId}?vrf=xxx
      */
     private suspend fun extractChapterImagesVrf(chapterId: String, mangaId: String, type: String, langCode: String, chapterNumber: Float): String {
-        // Load the actual chapter page to extract VRF using the readable chapter number
-        // Keep the full mangaId including the slug part (e.g., kkochi-samkin-jimseung.kx976)
-        // Use chapter number for URL construction (e.g., chapter-2) instead of internal ID
         val chapterNumberStr = if (chapterNumber == chapterNumber.toInt().toFloat()) {
             chapterNumber.toInt().toString()
         } else {
@@ -269,18 +254,12 @@ internal abstract class MangaFireParser(
         val chapterUrl = "https://$domain/read/$mangaId/$langCode/$type-$chapterNumberStr"
 
         try {
-            println("🔍 Extracting chapter images VRF for chapter $chapterId from chapter page: $chapterUrl")
-
-            // Capture URLs specifically for this chapter's images pattern
-            // PERFORMANCE OPTIMIZATION: Reduced timeout from 15s to 4s
+            // PERFORMANCE OPTIMIZATION: Reduced timeout from 4s to 2s
             val vrfUrls = context.captureWebViewUrls(
                 pageUrl = chapterUrl,
                 urlPattern = Regex("/ajax/read/chapter/$chapterId\\?vrf=([^&]+)"),
-                timeout = 4000L
+                timeout = 2000L
             )
-
-            println("📡 Captured ${vrfUrls.size} URLs matching chapter images VRF pattern for $chapterId")
-            vrfUrls.forEach { url -> println("   🔗 Captured URL: $url") }
 
             // Extract VRF token from captured URLs
             val vrf = vrfUrls.firstNotNullOfOrNull { url ->
@@ -288,15 +267,14 @@ internal abstract class MangaFireParser(
             }
 
             if (vrf != null) {
-                println("✅ Chapter images VRF extracted for $chapterId: ${vrf.take(10)}...")
                 return vrf
             }
 
-            // PERFORMANCE OPTIMIZATION: Reduced fallback timeout from 10s to 2s
+            // PERFORMANCE OPTIMIZATION: Reduced fallback timeout from 2s to 1s
             val fallbackUrls = context.captureWebViewUrls(
                 pageUrl = chapterUrl,
                 urlPattern = Regex("/ajax/read/chapter/\\d+\\?vrf=([^&]+)"),
-                timeout = 2000L
+                timeout = 1000L
             )
 
             val fallbackVrf = fallbackUrls.firstNotNullOfOrNull { url ->
@@ -304,12 +282,11 @@ internal abstract class MangaFireParser(
             }
 
             if (fallbackVrf != null) {
-                println("✅ Chapter images VRF extracted via fallback for $chapterId: ${fallbackVrf.take(10)}...")
                 return fallbackVrf
             }
 
         } catch (e: Exception) {
-            println("❌ Failed to extract chapter images VRF for chapter $chapterId from $chapterUrl: ${e.message}")
+            // Continue to exception handling
         }
 
         throw Exception("Unable to extract chapter images VRF for chapter $chapterId from chapter page: https://$domain/read/$mangaId/$langCode/$type-$chapterId")
@@ -320,9 +297,6 @@ internal abstract class MangaFireParser(
      * Pattern: /ajax/read/volume/{volumeId}?vrf=xxx
      */
     private suspend fun extractVolumeImagesVrf(volumeId: String, mangaId: String, type: String, langCode: String, volumeNumber: Float): String {
-        // Load the actual volume page to extract VRF using the readable volume number
-        // Keep the full mangaId including the slug part (e.g., kkochi-samkin-jimseung.kx976)
-        // Use volume number for URL construction (e.g., volume-2) instead of internal ID
         val volumeNumberStr = if (volumeNumber == volumeNumber.toInt().toFloat()) {
             volumeNumber.toInt().toString()
         } else {
@@ -331,18 +305,12 @@ internal abstract class MangaFireParser(
         val volumeUrl = "https://$domain/read/$mangaId/$langCode/$type-$volumeNumberStr"
 
         try {
-            println("🔍 Extracting volume images VRF for volume $volumeId from volume page: $volumeUrl")
-
-            // Capture URLs specifically for this volume's images pattern
-            // PERFORMANCE OPTIMIZATION: Reduced timeout from 15s to 4s
+            // PERFORMANCE OPTIMIZATION: Reduced timeout from 4s to 2s
             val vrfUrls = context.captureWebViewUrls(
                 pageUrl = volumeUrl,
                 urlPattern = Regex("/ajax/read/volume/$volumeId\\?vrf=([^&]+)"),
-                timeout = 4000L
+                timeout = 2000L
             )
-
-            println("📡 Captured ${vrfUrls.size} URLs matching volume images VRF pattern for $volumeId")
-            vrfUrls.forEach { url -> println("   🔗 Captured URL: $url") }
 
             // Extract VRF token from captured URLs
             val vrf = vrfUrls.firstNotNullOfOrNull { url ->
@@ -350,15 +318,14 @@ internal abstract class MangaFireParser(
             }
 
             if (vrf != null) {
-                println("✅ Volume images VRF extracted for $volumeId: ${vrf.take(10)}...")
                 return vrf
             }
 
-            // PERFORMANCE OPTIMIZATION: Reduced fallback timeout from 10s to 2s
+            // PERFORMANCE OPTIMIZATION: Reduced fallback timeout from 2s to 1s
             val fallbackUrls = context.captureWebViewUrls(
                 pageUrl = volumeUrl,
                 urlPattern = Regex("/ajax/read/volume/\\d+\\?vrf=([^&]+)"),
-                timeout = 2000L
+                timeout = 1000L
             )
 
             val fallbackVrf = fallbackUrls.firstNotNullOfOrNull { url ->
@@ -366,12 +333,11 @@ internal abstract class MangaFireParser(
             }
 
             if (fallbackVrf != null) {
-                println("✅ Volume images VRF extracted via fallback for $volumeId: ${fallbackVrf.take(10)}...")
                 return fallbackVrf
             }
 
         } catch (e: Exception) {
-            println("❌ Failed to extract volume images VRF for volume $volumeId from $volumeUrl: ${e.message}")
+            // Continue to exception handling
         }
 
         throw Exception("Unable to extract volume images VRF for volume $volumeId from volume page: https://$domain/read/$mangaId/$langCode/$type-$volumeId")

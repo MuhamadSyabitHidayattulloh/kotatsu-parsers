@@ -60,6 +60,8 @@ import kotlin.math.min
 
 private const val PIECE_SIZE = 200
 private const val MIN_SPLIT_COUNT = 5
+private const val VRF_RETRY_ATTEMPTS = 3
+private const val VRF_RETRY_DELAY_MS = 350L
 
 @Suppress("CustomX509TrustManager")
 internal abstract class MangaFireParser(
@@ -125,6 +127,41 @@ internal abstract class MangaFireParser(
             }
             .build()
         OkHttpWebClient(newHttpClient, source)
+    }
+
+    private val vrfParamRegex = Regex("[?&]vrf=([^&]+)")
+
+    private data class RetryOutcome<T>(
+        val value: T?,
+        val error: Throwable?,
+    )
+
+    private suspend fun <T> retryUntilNotNull(
+        attempts: Int = VRF_RETRY_ATTEMPTS,
+        delayMs: Long = VRF_RETRY_DELAY_MS,
+        block: suspend () -> T?,
+    ): RetryOutcome<T> {
+        var lastError: Throwable? = null
+        repeat(attempts) { attempt ->
+            try {
+                val result = block()
+                if (result != null) {
+                    return RetryOutcome(result, null)
+                }
+            } catch (e: Throwable) {
+                lastError = e
+            }
+            if (attempt < attempts - 1) {
+                delay(delayMs)
+            }
+        }
+        return RetryOutcome(null, lastError)
+    }
+
+    private fun extractVrfFromUrls(urls: List<String>): String? {
+        return urls.firstNotNullOfOrNull { url ->
+            vrfParamRegex.find(url)?.groupValues?.getOrNull(1)
+        }
     }
 
     override val configKeyDomain: ConfigKey.Domain = ConfigKey.Domain("mangafire.to")
@@ -197,48 +234,39 @@ internal abstract class MangaFireParser(
 
         val mangaIdPart = mangaId.substringAfterLast('.')
 
-        for (chapterNum in chapterOptions) {
-            try {
-                val chapterUrl = "https://$domain/read/$mangaId/$langCode/$type-$chapterNum"
+        val primaryPattern = Regex("/ajax/read/$mangaIdPart/$type/$langCode\\?vrf=([^&]+)")
+        val fallbackPattern = Regex("/ajax/read/[^/]+/$type/$langCode\\?vrf=([^&]+)")
+        var lastError: Throwable? = null
 
-                // PERFORMANCE OPTIMIZATION: Reduced timeout from 5s to 2s
+        for (chapterNum in chapterOptions) {
+            val chapterUrl = "https://$domain/read/$mangaId/$langCode/$type-$chapterNum"
+
+            val primaryOutcome = retryUntilNotNull {
                 val vrfUrls = context.captureWebViewUrls(
                     pageUrl = chapterUrl,
-                    urlPattern = Regex("/ajax/read/$mangaIdPart/$type/$langCode\\?vrf=([^&]+)"),
-                    timeout = 2000L
+                    urlPattern = primaryPattern,
+                    timeout = 2000L,
                 )
+                extractVrfFromUrls(vrfUrls)
+            }
+            primaryOutcome.value?.let { return it }
+            lastError = primaryOutcome.error ?: lastError
 
-                // Extract VRF token from captured URLs
-                val vrf = vrfUrls.firstNotNullOfOrNull { url ->
-                    Regex("[?&]vrf=([^&]+)").find(url)?.groupValues?.get(1)
-                }
-
-                if (vrf != null) {
-                    return vrf
-                }
-
-                // PERFORMANCE OPTIMIZATION: Reduced fallback timeout from 3s to 1s
+            val fallbackOutcome = retryUntilNotNull {
                 val fallbackUrls = context.captureWebViewUrls(
                     pageUrl = chapterUrl,
-                    urlPattern = Regex("/ajax/read/[^/]+/$type/$langCode\\?vrf=([^&]+)"),
-                    timeout = 1000L
+                    urlPattern = fallbackPattern,
+                    timeout = 1000L,
                 )
-
-                val fallbackVrf = fallbackUrls.firstNotNullOfOrNull { url ->
-                    Regex("[?&]vrf=([^&]+)").find(url)?.groupValues?.get(1)
-                }
-
-                if (fallbackVrf != null) {
-                    return fallbackVrf
-                }
-
-            } catch (e: Exception) {
-                // Continue trying other chapter numbers
-                continue
+                extractVrfFromUrls(fallbackUrls)
             }
+            fallbackOutcome.value?.let { return it }
+            lastError = fallbackOutcome.error ?: lastError
         }
 
-        throw Exception("Unable to extract chapter list VRF for $mangaId/$type/$langCode from chapter pages")
+        val message = "Unable to extract chapter list VRF for $mangaId/$type/$langCode from chapter pages"
+        lastError?.let { throw Exception(message, it) }
+        throw Exception(message)
     }
 
     /**
@@ -253,43 +281,35 @@ internal abstract class MangaFireParser(
         }
         val chapterUrl = "https://$domain/read/$mangaId/$langCode/$type-$chapterNumberStr"
 
-        try {
-            // PERFORMANCE OPTIMIZATION: Reduced timeout from 4s to 2s
+        val primaryPattern = Regex("/ajax/read/chapter/$chapterId\\?vrf=([^&]+)")
+        val fallbackPattern = Regex("/ajax/read/chapter/\\d+\\?vrf=([^&]+)")
+        var lastError: Throwable? = null
+
+        val primaryOutcome = retryUntilNotNull {
             val vrfUrls = context.captureWebViewUrls(
                 pageUrl = chapterUrl,
-                urlPattern = Regex("/ajax/read/chapter/$chapterId\\?vrf=([^&]+)"),
-                timeout = 2000L
+                urlPattern = primaryPattern,
+                timeout = 2000L,
             )
+            extractVrfFromUrls(vrfUrls)
+        }
+        primaryOutcome.value?.let { return it }
+        lastError = primaryOutcome.error ?: lastError
 
-            // Extract VRF token from captured URLs
-            val vrf = vrfUrls.firstNotNullOfOrNull { url ->
-                Regex("[?&]vrf=([^&]+)").find(url)?.groupValues?.get(1)
-            }
-
-            if (vrf != null) {
-                return vrf
-            }
-
-            // PERFORMANCE OPTIMIZATION: Reduced fallback timeout from 2s to 1s
+        val fallbackOutcome = retryUntilNotNull {
             val fallbackUrls = context.captureWebViewUrls(
                 pageUrl = chapterUrl,
-                urlPattern = Regex("/ajax/read/chapter/\\d+\\?vrf=([^&]+)"),
-                timeout = 1000L
+                urlPattern = fallbackPattern,
+                timeout = 1000L,
             )
-
-            val fallbackVrf = fallbackUrls.firstNotNullOfOrNull { url ->
-                Regex("[?&]vrf=([^&]+)").find(url)?.groupValues?.get(1)
-            }
-
-            if (fallbackVrf != null) {
-                return fallbackVrf
-            }
-
-        } catch (e: Exception) {
-            // Continue to exception handling
+            extractVrfFromUrls(fallbackUrls)
         }
+        fallbackOutcome.value?.let { return it }
+        lastError = fallbackOutcome.error ?: lastError
 
-        throw Exception("Unable to extract chapter images VRF for chapter $chapterId from chapter page: https://$domain/read/$mangaId/$langCode/$type-$chapterId")
+        val message = "Unable to extract chapter images VRF for chapter $chapterId from chapter page: https://$domain/read/$mangaId/$langCode/$type-$chapterNumberStr"
+        lastError?.let { throw Exception(message, it) }
+        throw Exception(message)
     }
 
     /**
@@ -304,43 +324,35 @@ internal abstract class MangaFireParser(
         }
         val volumeUrl = "https://$domain/read/$mangaId/$langCode/$type-$volumeNumberStr"
 
-        try {
-            // PERFORMANCE OPTIMIZATION: Reduced timeout from 4s to 2s
+        val primaryPattern = Regex("/ajax/read/volume/$volumeId\\?vrf=([^&]+)")
+        val fallbackPattern = Regex("/ajax/read/volume/\\d+\\?vrf=([^&]+)")
+        var lastError: Throwable? = null
+
+        val primaryOutcome = retryUntilNotNull {
             val vrfUrls = context.captureWebViewUrls(
                 pageUrl = volumeUrl,
-                urlPattern = Regex("/ajax/read/volume/$volumeId\\?vrf=([^&]+)"),
-                timeout = 2000L
+                urlPattern = primaryPattern,
+                timeout = 2000L,
             )
+            extractVrfFromUrls(vrfUrls)
+        }
+        primaryOutcome.value?.let { return it }
+        lastError = primaryOutcome.error ?: lastError
 
-            // Extract VRF token from captured URLs
-            val vrf = vrfUrls.firstNotNullOfOrNull { url ->
-                Regex("[?&]vrf=([^&]+)").find(url)?.groupValues?.get(1)
-            }
-
-            if (vrf != null) {
-                return vrf
-            }
-
-            // PERFORMANCE OPTIMIZATION: Reduced fallback timeout from 2s to 1s
+        val fallbackOutcome = retryUntilNotNull {
             val fallbackUrls = context.captureWebViewUrls(
                 pageUrl = volumeUrl,
-                urlPattern = Regex("/ajax/read/volume/\\d+\\?vrf=([^&]+)"),
-                timeout = 1000L
+                urlPattern = fallbackPattern,
+                timeout = 1000L,
             )
-
-            val fallbackVrf = fallbackUrls.firstNotNullOfOrNull { url ->
-                Regex("[?&]vrf=([^&]+)").find(url)?.groupValues?.get(1)
-            }
-
-            if (fallbackVrf != null) {
-                return fallbackVrf
-            }
-
-        } catch (e: Exception) {
-            // Continue to exception handling
+            extractVrfFromUrls(fallbackUrls)
         }
+        fallbackOutcome.value?.let { return it }
+        lastError = fallbackOutcome.error ?: lastError
 
-        throw Exception("Unable to extract volume images VRF for volume $volumeId from volume page: https://$domain/read/$mangaId/$langCode/$type-$volumeId")
+        val message = "Unable to extract volume images VRF for volume $volumeId from volume page: https://$domain/read/$mangaId/$langCode/$type-$volumeNumberStr"
+        lastError?.let { throw Exception(message, it) }
+        throw Exception(message)
     }
 
     /**

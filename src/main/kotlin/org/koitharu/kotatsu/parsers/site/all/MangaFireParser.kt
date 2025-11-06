@@ -316,6 +316,68 @@ internal abstract class MangaFireParser(
     }
 
     /**
+     * Extract VRF token for individual volume images from the actual volume page
+     * Pattern: /ajax/read/volume/{volumeId}?vrf=xxx
+     */
+    private suspend fun extractVolumeImagesVrf(volumeId: String, mangaId: String, type: String, langCode: String, volumeNumber: Float): String {
+        // Load the actual volume page to extract VRF using the readable volume number
+        // Keep the full mangaId including the slug part (e.g., kkochi-samkin-jimseung.kx976)
+        // Use volume number for URL construction (e.g., volume-2) instead of internal ID
+        val volumeNumberStr = if (volumeNumber == volumeNumber.toInt().toFloat()) {
+            volumeNumber.toInt().toString()
+        } else {
+            volumeNumber.toString()
+        }
+        val volumeUrl = "https://$domain/read/$mangaId/$langCode/$type-$volumeNumberStr"
+
+        try {
+            println("🔍 Extracting volume images VRF for volume $volumeId from volume page: $volumeUrl")
+
+            // Capture URLs specifically for this volume's images pattern
+            // PERFORMANCE OPTIMIZATION: Reduced timeout from 15s to 4s
+            val vrfUrls = context.captureWebViewUrls(
+                pageUrl = volumeUrl,
+                urlPattern = Regex("/ajax/read/volume/$volumeId\\?vrf=([^&]+)"),
+                timeout = 4000L
+            )
+
+            println("📡 Captured ${vrfUrls.size} URLs matching volume images VRF pattern for $volumeId")
+            vrfUrls.forEach { url -> println("   🔗 Captured URL: $url") }
+
+            // Extract VRF token from captured URLs
+            val vrf = vrfUrls.firstNotNullOfOrNull { url ->
+                Regex("[?&]vrf=([^&]+)").find(url)?.groupValues?.get(1)
+            }
+
+            if (vrf != null) {
+                println("✅ Volume images VRF extracted for $volumeId: ${vrf.take(10)}...")
+                return vrf
+            }
+
+            // PERFORMANCE OPTIMIZATION: Reduced fallback timeout from 10s to 2s
+            val fallbackUrls = context.captureWebViewUrls(
+                pageUrl = volumeUrl,
+                urlPattern = Regex("/ajax/read/volume/\\d+\\?vrf=([^&]+)"),
+                timeout = 2000L
+            )
+
+            val fallbackVrf = fallbackUrls.firstNotNullOfOrNull { url ->
+                Regex("[?&]vrf=([^&]+)").find(url)?.groupValues?.get(1)
+            }
+
+            if (fallbackVrf != null) {
+                println("✅ Volume images VRF extracted via fallback for $volumeId: ${fallbackVrf.take(10)}...")
+                return fallbackVrf
+            }
+
+        } catch (e: Exception) {
+            println("❌ Failed to extract volume images VRF for volume $volumeId from $volumeUrl: ${e.message}")
+        }
+
+        throw Exception("Unable to extract volume images VRF for volume $volumeId from volume page: https://$domain/read/$mangaId/$langCode/$type-$volumeId")
+    }
+
+    /**
      * Extract VRF token based on operation type
      * Routes to appropriate specific VRF extraction method
      */
@@ -324,7 +386,9 @@ internal abstract class MangaFireParser(
         mangaId: String? = null,
         type: String? = null,
         langCode: String? = null,
-        chapterId: String? = null
+        chapterId: String? = null,
+        volumeId: String? = null,
+        number: Float? = null
     ): String {
         return when (operation) {
             "chapter_list" -> {
@@ -339,6 +403,11 @@ internal abstract class MangaFireParser(
                 // Chapter images VRF extraction is now handled directly in getPages() function
                 // to properly pass the chapter number for URL construction
                 throw IllegalStateException("chapter_images VRF should be extracted directly via extractChapterImagesVrf(), not through extractVrfToken()")
+            }
+            "volume_images" -> {
+                // Volume images VRF extraction is now handled directly in getPages() function
+                // to properly pass the volume number for URL construction
+                throw IllegalStateException("volume_images VRF should be extracted directly via extractVolumeImagesVrf(), not through extractVrfToken()")
             }
             "search" -> {
                 // Search temporarily disabled due to VRF complexity - each search requires unique VRF token
@@ -528,7 +597,7 @@ internal abstract class MangaFireParser(
             .let(Jsoup::parseBodyFragment)
             .select("ul li a")
 
-        if (branch.type == "chapter") {
+        if (branch.type == "chapter" || branch.type == "volume") {
             val doc = client
                 .httpGet("https://$domain/ajax/manga/$mangaIdPart/${branch.type}/${branch.langCode}")
                 .parseJson()
@@ -648,8 +717,8 @@ internal abstract class MangaFireParser(
     }
 
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-        val chapterId = chapter.url.substringAfterLast('/')
-        // Extract mangaId from chapter URL pattern: mangaId/type/lang/chapterId
+        val itemId = chapter.url.substringAfterLast('/')
+        // Extract mangaId from chapter URL pattern: mangaId/type/lang/itemId (itemId = chapterId or volumeId)
         val urlParts = chapter.url.split('/')
         require(urlParts.size >= 4) { "Invalid chapter URL format: ${chapter.url}" }
 
@@ -657,16 +726,32 @@ internal abstract class MangaFireParser(
         val type = urlParts[1]
         val langCode = urlParts[2]
 
-        val vrf = extractChapterImagesVrf(
-            chapterId = chapterId,
-            mangaId = mangaId,
-            type = type,
-            langCode = langCode,
-            chapterNumber = chapter.number
-        )
+        val (vrf, endpoint) = when (type) {
+            "chapter" -> {
+                val vrf = extractChapterImagesVrf(
+                    chapterId = itemId,
+                    mangaId = mangaId,
+                    type = type,
+                    langCode = langCode,
+                    chapterNumber = chapter.number
+                )
+                vrf to "chapter"
+            }
+            "volume" -> {
+                val vrf = extractVolumeImagesVrf(
+                    volumeId = itemId,
+                    mangaId = mangaId,
+                    type = type,
+                    langCode = langCode,
+                    volumeNumber = chapter.number
+                )
+                vrf to "volume"
+            }
+            else -> throw IllegalArgumentException("Unknown content type: $type")
+        }
 
         val images = client
-            .httpGet("https://$domain/ajax/read/chapter/$chapterId?vrf=$vrf")
+            .httpGet("https://$domain/ajax/read/$endpoint/$itemId?vrf=$vrf")
             .parseJson()
             .getJSONObject("result")
             .getJSONArray("images")

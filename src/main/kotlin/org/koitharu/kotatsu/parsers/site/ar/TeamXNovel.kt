@@ -187,24 +187,68 @@ internal class TeamXNovel(context: MangaLoaderContext) :
 		return parseChapters(webClient.httpGet("$baseUrl?page=$page").parseHtml().body())
 	}
 
-	private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", sourceLocale)
+	private val dateFormat = SimpleDateFormat("yyyy-MM-dd hh:mm:ss", Locale.getDefault())
 
 	private fun parseChapters(root: Element): List<MangaChapter> {
-		return root.requireElementById("chapter-contact").select(".chapter-card li")
-			.map { li ->
-				val url = li.selectFirstOrThrow("a").attrAsRelativeUrl("href")
-				MangaChapter(
-					id = generateUid(url),
-					title = li.selectFirstOrThrow(".chapter-info div.chapter-title").text(),
-					number = url.substringAfterLast('/').toFloatOrNull() ?: 0f,
-					volume = 0,
-					url = url,
-					scanlator = null,
-					uploadDate = dateFormat.parseSafe(li.selectFirstOrThrow(".chapter-info div.chapter-date").text()),
-					branch = null,
-					source = source,
-				)
+		// Try current website structure first (enhanced-chapters-grid)
+		val chapters = root.select("div.enhanced-chapters-grid a.chapter-link").ifEmpty {
+			// Fallback to potential alternative structures
+			root.select("div.chapter-card a").ifEmpty {
+				root.select("div.eplister ul a").ifEmpty {
+					root.select("#chapter-contact .eplister ul li a")
+				}
 			}
+		}
+
+		return chapters.map { element ->
+			val url = element.attrAsRelativeUrl("href")
+
+			// Extract chapter number and title from current structure
+			val chpNum = element.select(".chapter-number").text()
+			val chpTitle = element.select(".chapter-title").text()
+
+			// Fallback to old structure if current selectors are empty
+			val finalChpNum = chpNum.ifEmpty {
+				element.select("div.chapter-info div.chapter-number").text().ifEmpty {
+					element.select("div.epl-num").text()
+				}
+			}
+			val finalChpTitle = chpTitle.ifEmpty {
+				element.select("div.chapter-info div.chapter-title").text().ifEmpty {
+					element.select("div.epl-title").text()
+				}
+			}
+
+			val title = when {
+				finalChpNum.isNotBlank() -> "$finalChpNum - $finalChpTitle"
+				else -> finalChpTitle
+			}
+
+			// Extract date from current structure, fallback to old structures
+			val dateText = element.select(".chapter-date").text().ifEmpty {
+				element.select("div.chapter-info div.chapter-date").text().ifEmpty {
+					element.select("div.epl-date").text()
+				}
+			}.replace(Regex("^\\s*\\S+\\s+"), "") // Remove icon text if present
+
+			// Try to extract chapter number from data attribute or URL
+			val chapterNumber = element.select("div.chapter-card").attr("data-number").toFloatOrNull()
+				?: finalChpNum.filter { it.isDigit() || it == '.' }.toFloatOrNull()
+				?: url.substringAfterLast('/').toFloatOrNull()
+				?: 0f
+
+			MangaChapter(
+				id = generateUid(url),
+				title = title,
+				number = chapterNumber,
+				volume = 0,
+				url = url,
+				scanlator = null,
+				uploadDate = dateFormat.parseSafe(dateText),
+				branch = null,
+				source = source,
+			)
+		}
 	}
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {

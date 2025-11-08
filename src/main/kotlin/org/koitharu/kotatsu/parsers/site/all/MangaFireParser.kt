@@ -326,30 +326,58 @@ private suspend fun extractSearchVrf(keyword: String): String {
         ) {
             val pageJs = """
             (function(){
+              console.log('[MF_VRF] PageScript started for keyword: ${kw}');
               const kw='${kw}';
               function trigger(){
                 const input=document.querySelector('.search-inner input[name=keyword]');
                 const form=document.querySelector('.search-inner form');
-                if(!input){ return false; }
+                const hiddenVrf = document.querySelector('.search-inner input[name=vrf]');
+                console.log('[MF_VRF] Elements found:', {input: !!input, form: !!form, hiddenVrf: !!hiddenVrf});
+                if(!input){
+                  console.log('[MF_VRF] Search input not found');
+                  return false;
+                }
+                console.log('[MF_VRF] Setting keyword and triggering search:', kw);
                 input.value=kw;
                 input.focus();
                 input.dispatchEvent(new Event('input',{bubbles:true}));
                 input.dispatchEvent(new Event('change',{bubbles:true}));
                 input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}));
-                setTimeout(()=>{ try{ form && form.submit(); }catch(_){ } },300);
+                setTimeout(()=>{
+                  try{
+                    if (hiddenVrf) console.log('[MF_VRF] Hidden VRF value:', hiddenVrf.value);
+                    if (form) {
+                      console.log('[MF_VRF] Submitting form');
+                      form.submit();
+                    } else {
+                      console.log('[MF_VRF] No form to submit');
+                    }
+                  }catch(e){
+                    console.log('[MF_VRF] Form submit error:', e);
+                  }
+                },300);
                 return true;
               }
               if(!trigger()){
-                const t=setInterval(()=>{ if(trigger()){ clearInterval(t); } },150);
-                setTimeout(()=>clearInterval(t),5000);
+                console.log('[MF_VRF] Initial trigger failed, retrying...');
+                const t=setInterval(()=>{
+                  if(trigger()){
+                    console.log('[MF_VRF] Retry successful');
+                    clearInterval(t);
+                  }
+                },150);
+                setTimeout(()=>{
+                  console.log('[MF_VRF] Giving up after 5 seconds');
+                  clearInterval(t);
+                },5000);
+              } else {
+                console.log('[MF_VRF] Initial trigger successful');
               }
             })();
             """.trimIndent()
 
             val filterJs = """
-            return (url.includes('/ajax/manga/search') && url.includes('vrf=')) ||
-                   (url.includes('/filter') && url.includes('vrf=')) ||
-                    url.includes('vrf=');
+            return url.includes('vrf=');
             """.trimIndent()
 
             val config = org.koitharu.kotatsu.parsers.webview.InterceptionConfig(
@@ -364,7 +392,29 @@ private suspend fun extractSearchVrf(keyword: String): String {
                 config = config
             )
 
-            intercepted.firstNotNullOfOrNull { it.getQueryParameter("vrf") }
+            // Extract VRF from filter page URL and validate it's the right pattern
+            intercepted.firstNotNullOfOrNull { request ->
+                val url = request.url
+                println("[MF_VRF] Checking captured URL: $url")
+
+                if (url.contains("/filter") && url.contains("keyword=") && url.contains("vrf=")) {
+                    println("[MF_VRF] Found matching filter URL: $url")
+                    val vrf = request.getQueryParameter("vrf")
+                    if (vrf?.isNotBlank() == true) {
+                        println("[MF_VRF] Extracted VRF: $vrf")
+                        // Validate we can construct the search AJAX URL
+                        val searchUrl = "https://${domain}/ajax/manga/search?keyword=${kw.urlEncoded()}&vrf=$vrf"
+                        println("[MF_VRF] Will use AJAX URL: $searchUrl")
+                        vrf
+                    } else {
+                        println("[MF_VRF] VRF is blank or null")
+                        null
+                    }
+                } else {
+                    println("[MF_VRF] URL doesn't match filter pattern: $url")
+                    null
+                }
+            }
         }
 
         primaryOutcome.value?.let { return it }
@@ -451,9 +501,9 @@ private suspend fun extractSearchVrf(keyword: String): String {
                 throw IllegalStateException("volume_images VRF should be extracted directly via extractVolumeImagesVrf(), not through extractVrfToken()")
             }
             "search" -> {
-                require(mangaId != null) { "keyword (mangaId parameter) is required for search operation" }
-                // Extract VRF for search using webview injection
-                extractSearchVrf(mangaId) // Using mangaId parameter to pass the search keyword
+                // Search VRF extraction is now handled directly by extractSearchVrf() method
+                // This case should no longer be used
+                throw IllegalStateException("search VRF should be extracted directly via extractSearchVrf(), not through extractVrfToken()")
             }
             else -> {
                 throw IllegalArgumentException("Unknown VRF operation: $operation")
@@ -468,13 +518,10 @@ private suspend fun extractSearchVrf(keyword: String): String {
 
             when {
                 !filter.query.isNullOrEmpty() -> {
-                    // Search functionality - extract VRF and perform AJAX search
-                    val searchVrf = extractVrfToken(
-                        operation = "search",
-                        mangaId = filter.query // Pass query as mangaId parameter
-                    )
+                    // Search functionality - extract VRF from filter page navigation
+                    val searchVrf = extractSearchVrf(filter.query)
 
-                    // Perform search using AJAX with VRF token
+                    // Use the extracted VRF to make the actual AJAX search request
                     val searchResponse = client.httpGet(
                         "https://$domain/ajax/manga/search?keyword=${filter.query.urlEncoded()}&vrf=$searchVrf"
                     ).parseJson()

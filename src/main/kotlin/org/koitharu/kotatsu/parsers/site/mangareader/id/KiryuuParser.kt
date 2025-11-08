@@ -1,5 +1,7 @@
 package org.koitharu.kotatsu.parsers.site.mangareader.id
 
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Headers.Companion.headersOf
 import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
@@ -41,10 +43,19 @@ internal class KiryuuParser(context: MangaLoaderContext) :
 				?: Regex("nonce=([a-f0-9]+)").find(pageHtml)?.groupValues?.get(1)
 				?: "eadaed75c9" // Fallback from intercepted request
 
-			// Make AJAX search request - based on intercepted request, body is just the query
+			// Make AJAX search request with HTMX headers
 			val searchUrl = "https://$domain/wp-admin/admin-ajax.php?nonce=$nonce&action=search"
 
-			val response = webClient.httpPost(searchUrl, query)
+			// Add required HTMX headers for search to work
+			val extraHeaders = headersOf(
+				"Hx-Request", "true",
+				"Hx-Trigger-Name", "query",
+				"Hx-Target", "searchModalContent",
+				"Hx-Current-Url", "https://$domain/",
+				"Content-Type", "application/x-www-form-urlencoded"
+			)
+
+			val response = webClient.httpPost(searchUrl.toHttpUrl(), query, extraHeaders)
 
 			val searchResults = response.parseHtml()
 

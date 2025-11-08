@@ -604,11 +604,10 @@ private suspend fun extractSearchVrf(keyword: String): String {
     }
 
     private fun Document.parseSearchResults(): List<Manga> {
-        return select(".original.card-sm.body").map {
-            val a = it.selectFirstOrThrow("a.unit")
+        return select(".original.card-sm.body a.unit").map { a ->
             val mangaUrl = a.attrAsRelativeUrl("href")
-            val title = it.selectFirstOrThrow(".info > h6").ownText()
-            val coverUrl = it.selectFirstOrThrow(".poster img").attr("src").replace("@100", "")
+            val title = a.selectFirstOrThrow(".info > h6").ownText()
+            val coverUrl = a.selectFirstOrThrow(".poster img").attr("src").replace("@100", "")
 
             println("[MF_VRF] Parsing search result: title='$title' url='$mangaUrl' cover='$coverUrl'")
 

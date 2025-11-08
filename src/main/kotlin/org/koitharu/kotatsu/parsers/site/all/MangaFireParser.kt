@@ -313,6 +313,56 @@ internal abstract class MangaFireParser(
     }
 
     /**
+     * Extract VRF token for search from the main page using webview injection
+     * Pattern: /ajax/manga/search?keyword=xxx&vrf=xxx
+     */
+    private suspend fun extractSearchVrf(keyword: String): String {
+        var lastError: Throwable? = null
+
+        val primaryOutcome = retryUntilNotNull {
+            val interceptedRequests = context.interceptWebViewRequests(
+                url = "https://$domain/",
+                timeout = 5000L,
+                interceptorScript = """
+                    // Wait for page to load then perform search
+                    setTimeout(() => {
+                        const searchInput = document.querySelector('.search-inner input[name=keyword]');
+                        if (searchInput) {
+                            searchInput.value = '$keyword';
+                            searchInput.focus();
+
+                            // Trigger search by pressing Enter
+                            const enterEvent = new KeyboardEvent('keydown', {
+                                key: 'Enter',
+                                keyCode: 13,
+                                which: 13,
+                                bubbles: true
+                            });
+                            searchInput.dispatchEvent(enterEvent);
+                        }
+                    }, 1500);
+
+                    // Return true for AJAX search requests
+                    return url.includes('/ajax/manga/search') && url.includes('vrf=');
+                """.trimIndent()
+            )
+
+            // Extract VRF from the intercepted search request
+            interceptedRequests.firstNotNullOfOrNull { request ->
+                if (request.url.contains("/ajax/manga/search")) {
+                    request.getQueryParameter("vrf")
+                } else null
+            }
+        }
+        primaryOutcome.value?.let { return it }
+        lastError = primaryOutcome.error ?: lastError
+
+        val message = "Unable to extract search VRF for keyword: $keyword"
+        lastError?.let { throw Exception(message, it) }
+        throw Exception(message)
+    }
+
+    /**
      * Extract VRF token for individual volume images from the actual volume page
      * Pattern: /ajax/read/volume/{volumeId}?vrf=xxx
      */
@@ -388,9 +438,9 @@ internal abstract class MangaFireParser(
                 throw IllegalStateException("volume_images VRF should be extracted directly via extractVolumeImagesVrf(), not through extractVrfToken()")
             }
             "search" -> {
-                // Search temporarily disabled due to VRF complexity - each search requires unique VRF token
-                // Users can use Browse/Filter functionality instead
-                throw UnsupportedOperationException("Search temporarily unavailable - use Browse/Filter instead. Search VRF requires complex WebView interaction and will be implemented later.")
+                require(mangaId != null) { "keyword (mangaId parameter) is required for search operation" }
+                // Extract VRF for search using webview injection
+                extractSearchVrf(mangaId) // Using mangaId parameter to pass the search keyword
             }
             else -> {
                 throw IllegalArgumentException("Unknown VRF operation: $operation")
@@ -405,8 +455,21 @@ internal abstract class MangaFireParser(
 
             when {
                 !filter.query.isNullOrEmpty() -> {
-                    // Search temporarily disabled due to VRF complexity
-                    throw UnsupportedOperationException("Search temporarily unavailable - use Browse/Filter instead. Search requires unique VRF tokens for each query, which needs complex WebView interaction.")
+                    // Search functionality - extract VRF and perform AJAX search
+                    val searchVrf = extractVrfToken(
+                        operation = "search",
+                        mangaId = filter.query // Pass query as mangaId parameter
+                    )
+
+                    // Perform search using AJAX with VRF token
+                    val searchResponse = client.httpGet(
+                        "https://$domain/ajax/manga/search?keyword=${filter.query.urlEncoded()}&vrf=$searchVrf"
+                    ).parseJson()
+
+                    // Parse search results from JSON response
+                    return searchResponse.getString("result")
+                        .let(Jsoup::parseBodyFragment)
+                        .parseMangaList()
                 }
 
                 else -> {

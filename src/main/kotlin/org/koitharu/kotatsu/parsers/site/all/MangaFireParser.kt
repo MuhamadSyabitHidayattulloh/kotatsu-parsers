@@ -608,7 +608,7 @@ private suspend fun extractSearchVrf(keyword: String): String {
             val a = it.selectFirstOrThrow("a.unit")
             val mangaUrl = a.attrAsRelativeUrl("href")
             val title = it.selectFirstOrThrow(".info > h6").ownText()
-            val coverUrl = it.selectFirstOrThrow(".poster img").attrAsAbsoluteUrl("src")
+            val coverUrl = it.selectFirstOrThrow(".poster img").attr("src").replace("@100", "")
 
             println("[MF_VRF] Parsing search result: title='$title' url='$mangaUrl' cover='$coverUrl'")
 

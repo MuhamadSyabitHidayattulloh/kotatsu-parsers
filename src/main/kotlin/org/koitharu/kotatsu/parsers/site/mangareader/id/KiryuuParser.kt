@@ -18,21 +18,25 @@ internal class KiryuuParser(context: MangaLoaderContext) :
 			isTagsExclusionSupported = false,
 		)
 
-	// Override parsing for WordPress block theme
+	// Override parsing for new Kiryuu structure (no CSS classes)
 	override fun parseMangaList(docs: Document): List<Manga> {
-		return docs.select(".wp-block-post-template a, .manga-grid a, .manga-card a").mapNotNull { a ->
+		return docs.select("div").filter { div ->
+			// Find divs that contain manga links
+			div.selectFirst("a[href*='/manga/']") != null &&
+			div.selectFirst("h2") != null
+		}.mapNotNull { item ->
+			val a = item.selectFirst("a[href*='/manga/']") ?: return@mapNotNull null
 			val url = a.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
-			if (!url.contains("/manga/")) return@mapNotNull null
 
-			val title = a.selectFirst("h3, .title")?.text()?.trim()
-				?: a.attr("title")?.trim()
-				?: return@mapNotNull null
+			val title = item.selectFirst("h2")?.text()?.trim() ?: return@mapNotNull null
 
-			val img = a.selectFirst("img")
+			val img = item.selectFirst("img")
 			val coverUrl = img?.src()
 
-			val rating = a.selectFirst(".rating, .score")?.text()?.trim()
-				?.toFloatOrNull() ?: RATING_UNKNOWN
+			// Rating is in a div element (7.00, etc.)
+			val rating = item.select("div").find {
+				it.text().matches(Regex("\\d+\\.\\d+"))
+			}?.text()?.toFloatOrNull() ?: RATING_UNKNOWN
 
 			Manga(
 				id = generateUid(url),

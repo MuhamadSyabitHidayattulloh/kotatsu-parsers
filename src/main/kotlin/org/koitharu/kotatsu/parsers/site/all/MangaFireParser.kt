@@ -381,7 +381,7 @@ private suspend fun extractSearchVrf(keyword: String): String {
             """.trimIndent()
 
             val config = org.koitharu.kotatsu.parsers.webview.InterceptionConfig(
-                timeoutMs = 3000L,           // much shorter timeout since VRF comes quickly
+                timeoutMs = 15000L,          // reasonable timeout, but will stop immediately when VRF found
                 pageScript = pageJs,         // this injects and executes in the WebView
                 filterScript = filterJs,     // this is only the predicate
                 maxRequests = 1              // Stop after finding the first VRF match!

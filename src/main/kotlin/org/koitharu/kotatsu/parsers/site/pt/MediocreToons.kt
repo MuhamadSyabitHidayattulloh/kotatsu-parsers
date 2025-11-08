@@ -37,8 +37,8 @@ internal class MediocreToons(context: MangaLoaderContext) : PagedMangaParser(
 	pageSize = 20,
 ) {
 	override val configKeyDomain = ConfigKey.Domain("mediocretoons.com")
-	private val apiUrl = "https://api.mediocretoons.com"
-	private val cdnUrl = "https://storage.mediocretoons.com"
+	private val apiUrl = "https://api.mediocretoons.site"
+	private val cdnUrl = "https://cdn2.fufutebol.com.br"
 
 	override val availableSortOrders: Set<SortOrder> = EnumSet.of(
 		SortOrder.UPDATED,

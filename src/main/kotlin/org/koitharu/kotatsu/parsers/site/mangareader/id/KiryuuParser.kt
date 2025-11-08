@@ -18,25 +18,31 @@ internal class KiryuuParser(context: MangaLoaderContext) :
 			isTagsExclusionSupported = false,
 		)
 
-	// Override parsing for new Kiryuu structure (no CSS classes)
+	// Override parsing for new Kiryuu structure with multiple fallback approaches
 	override fun parseMangaList(docs: Document): List<Manga> {
-		return docs.select("div").filter { div ->
-			// Find divs that contain manga links
-			div.selectFirst("a[href*='/manga/']") != null &&
-			div.selectFirst("h2") != null
-		}.mapNotNull { item ->
-			val a = item.selectFirst("a[href*='/manga/']") ?: return@mapNotNull null
+		// Approach 1: Look for any link containing /manga/
+		val mangaLinks = docs.select("a[href*='/manga/']").mapNotNull { a ->
 			val url = a.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
+			if (url.contains("/chapter-") || url.contains("page=")) return@mapNotNull null // Skip chapter and pagination links
 
-			val title = item.selectFirst("h2")?.text()?.trim() ?: return@mapNotNull null
+			// Try to find title in various ways
+			val title = a.selectFirst("h3, h2, h1")?.text()?.trim()
+				?: a.text().trim().takeIf { it.length > 3 && it.length < 100 }
+				?: a.attr("title")?.trim()
+				?: return@mapNotNull null
 
-			val img = item.selectFirst("img")
+			// Look for image in this element or nearby
+			val img = a.selectFirst("img")
+				?: a.parent()?.selectFirst("img")
+				?: a.nextElementSibling()?.selectFirst("img")
+
 			val coverUrl = img?.src()
 
-			// Rating is in a div element (7.00, etc.)
-			val rating = item.select("div").find {
-				it.text().matches(Regex("\\d+\\.\\d+"))
-			}?.text()?.toFloatOrNull() ?: RATING_UNKNOWN
+			// Try to find rating
+			val rating = (a.selectFirst("span") ?: a.parent()?.selectFirst("span"))?.text()?.trim()
+				?.let { text ->
+					Regex("(\\d+\\.\\d+)").find(text)?.value?.toFloatOrNull()
+				} ?: RATING_UNKNOWN
 
 			Manga(
 				id = generateUid(url),
@@ -53,5 +59,7 @@ internal class KiryuuParser(context: MangaLoaderContext) :
 				source = source,
 			)
 		}
+
+		return mangaLinks.distinctBy { it.url } // Remove duplicates
 	}
 }

@@ -381,10 +381,10 @@ private suspend fun extractSearchVrf(keyword: String): String {
             """.trimIndent()
 
             val config = org.koitharu.kotatsu.parsers.webview.InterceptionConfig(
-                timeoutMs = 20000L,          // give the page time to run the JS and fire XHR
+                timeoutMs = 8000L,           // reduced timeout, should be enough for page to load and execute JS
                 pageScript = pageJs,         // this injects and executes in the WebView
                 filterScript = filterJs,     // this is only the predicate
-                maxRequests = 30
+                maxRequests = 1              // Stop after finding the first VRF match!
             )
 
             val intercepted = context.interceptWebViewRequests(
@@ -527,7 +527,13 @@ private suspend fun extractSearchVrf(keyword: String): String {
                     ).parseJson()
 
                     // Parse search results from JSON response
-                    return searchResponse.getString("result")
+                    // Response format: {"status":200,"result":{"count":1,"html":"...Eleceed..."}}
+                    val resultObj = searchResponse.getJSONObject("result")
+                    val htmlContent = resultObj.getString("html")
+                    println("[MF_VRF] Search result count: ${resultObj.getInt("count")}")
+                    println("[MF_VRF] Processing search results HTML...")
+
+                    return htmlContent
                         .let(Jsoup::parseBodyFragment)
                         .parseMangaList()
                 }

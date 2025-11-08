@@ -381,7 +381,7 @@ private suspend fun extractSearchVrf(keyword: String): String {
             """.trimIndent()
 
             val config = org.koitharu.kotatsu.parsers.webview.InterceptionConfig(
-                timeoutMs = 8000L,           // reduced timeout, should be enough for page to load and execute JS
+                timeoutMs = 3000L,           // much shorter timeout since VRF comes quickly
                 pageScript = pageJs,         // this injects and executes in the WebView
                 filterScript = filterJs,     // this is only the predicate
                 maxRequests = 1              // Stop after finding the first VRF match!
@@ -535,7 +535,7 @@ private suspend fun extractSearchVrf(keyword: String): String {
 
                     return htmlContent
                         .let(Jsoup::parseBodyFragment)
-                        .parseMangaList()
+                        .parseSearchResults()
                 }
 
                 else -> {
@@ -591,6 +591,33 @@ private suspend fun extractSearchVrf(keyword: String): String {
                 publicUrl = mangaUrl.toAbsoluteUrl(domain),
                 title = a.ownText(),
                 coverUrl = it.selectFirstOrThrow("img").attrAsAbsoluteUrl("src"),
+                source = source,
+                altTitles = emptySet(),
+                largeCoverUrl = null,
+                authors = emptySet(),
+                contentRating = null,
+                rating = RATING_UNKNOWN,
+                state = null,
+                tags = emptySet(),
+            )
+        }
+    }
+
+    private fun Document.parseSearchResults(): List<Manga> {
+        return select(".original.card-sm.body").map {
+            val a = it.selectFirstOrThrow("a.unit")
+            val mangaUrl = a.attrAsRelativeUrl("href")
+            val title = it.selectFirstOrThrow(".info > h6").ownText()
+            val coverUrl = it.selectFirstOrThrow(".poster img").attrAsAbsoluteUrl("src")
+
+            println("[MF_VRF] Parsing search result: title='$title' url='$mangaUrl' cover='$coverUrl'")
+
+            Manga(
+                id = generateUid(mangaUrl),
+                url = mangaUrl,
+                publicUrl = mangaUrl.toAbsoluteUrl(domain),
+                title = title,
+                coverUrl = coverUrl,
                 source = source,
                 altTitles = emptySet(),
                 largeCoverUrl = null,

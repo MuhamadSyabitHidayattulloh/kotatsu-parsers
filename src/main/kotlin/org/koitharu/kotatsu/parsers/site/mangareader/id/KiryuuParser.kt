@@ -55,7 +55,9 @@ internal class KiryuuParser(context: MangaLoaderContext) :
 				"Content-Type", "application/x-www-form-urlencoded"
 			)
 
-			val response = webClient.httpPost(searchUrl.toHttpUrl(), query, extraHeaders)
+			// Send raw body as "query=search_term" - matches intercepted format exactly
+			val requestBody = "query=$query"
+			val response = webClient.httpPost(searchUrl.toHttpUrl(), requestBody, extraHeaders)
 
 			val searchResults = response.parseHtml()
 

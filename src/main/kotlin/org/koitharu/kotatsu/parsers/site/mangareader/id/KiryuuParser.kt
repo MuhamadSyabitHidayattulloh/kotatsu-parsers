@@ -20,7 +20,7 @@ internal class KiryuuParser(context: MangaLoaderContext) :
 		)
 
 	// Override description selector for WordPress block theme
-	override val detailsDescriptionSelector = ".entry-content, .synopsis, .description, [class*='description'], [class*='synopsis'], .summary"
+	override val detailsDescriptionSelector = "[itemprop='description'], [itemprop='description'] p, .entry-content p, .synopsis, .description, [class*='description'], [class*='synopsis'], .summary, .wp-block-paragraph, .content p"
 
 	// Override to handle AJAX search
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
@@ -268,5 +268,33 @@ internal class KiryuuParser(context: MangaLoaderContext) :
 		}
 
 		return parseInfo(docs, manga, chapters)
+	}
+
+	// Override chapter image parsing for Kiryuu's structure
+	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
+		val docs = webClient.httpGet(chapter.url.toAbsoluteUrl(domain)).parseHtml()
+
+		// Find the section containing all chapter images
+		val imageSection = docs.selectFirst("section[data-image-data]")
+			?: docs.selectFirst("section img")?.parent()
+			?: docs.selectFirst("[class*='chapter'] img")?.parent()
+			?: docs.body()
+
+		// Extract all images from the section
+		val images = imageSection.select("img").mapNotNull { img ->
+			val src = img.attr("src").takeIf { it.isNotBlank() }
+				?: img.attr("data-src").takeIf { it.isNotBlank() }
+				?: img.attr("data-lazy-src").takeIf { it.isNotBlank() }
+			src?.let { it.toAbsoluteUrl(docs.location()) }
+		}
+
+		return images.mapIndexed { index, url ->
+			MangaPage(
+				id = generateUid(url),
+				url = url,
+				preview = null,
+				source = source,
+			)
+		}
 	}
 }

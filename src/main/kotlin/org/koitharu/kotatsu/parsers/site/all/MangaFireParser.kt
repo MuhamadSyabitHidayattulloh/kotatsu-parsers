@@ -317,102 +317,39 @@ internal abstract class MangaFireParser(
      * Pattern: /ajax/manga/search?keyword=xxx&vrf=xxx
      */
     private suspend fun extractSearchVrf(keyword: String): String {
-        var lastError: Throwable? = null
+        val kw = keyword.replace("'", "\\'")
+        val interceptorScript = """
+        /*__PAGE_SCRIPT_START__*/
+        (function(){
+          const kw='${kw}';
+          const input=document.querySelector('.search-inner input[name=keyword]');
+          const form=document.querySelector('.search-inner form');
+          if(!input){ console.log('[MF_VRF] input not found'); return; }
+          input.value=kw;
+          input.focus();
+          input.dispatchEvent(new Event('input',{bubbles:true}));
+          input.dispatchEvent(new Event('change',{bubbles:true}));
+          input.dispatchEvent(new Event('keyup',{bubbles:true}));
+          const e=new KeyboardEvent('keydown',{key:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true});
+          input.dispatchEvent(e);
+          setTimeout(()=>{ try{ form && form.submit(); }catch(_){ } },400);
+        })();
+        /*__PAGE_SCRIPT_END__*/
+        return (url.includes('/ajax/manga/search') && url.includes('vrf=')) ||
+               (url.includes('/filter') && url.includes('vrf=')) ||
+               url.includes('vrf=');
+    """.trimIndent()
 
-        val primaryOutcome = retryUntilNotNull(
-            attempts = 3,
-            delayMs = 1000L
-        ) {
-            val interceptedRequests = context.interceptWebViewRequests(
-                url = "https://$domain/",
-                timeout = 10000L,
-                interceptorScript = """
-                    // Wait for page and JavaScript to load completely
-                    setTimeout(() => {
-                        console.log('Starting search VRF extraction for: $keyword');
+        val intercepted = context.interceptWebViewRequests(
+            url = "https://${domain}/",
+            interceptorScript = interceptorScript,
+            timeout = 12000L
+        )
 
-                        // Find the search input using the correct selector
-                        let searchInput = document.querySelector('.search-inner input[name=keyword]');
-                        let hiddenVrf = document.querySelector('.search-inner input[name=vrf]');
-                        let form = document.querySelector('.search-inner form');
-
-                        if (searchInput) {
-                            console.log('Found search elements');
-                            console.log('Search input:', searchInput);
-                            console.log('Hidden VRF field:', hiddenVrf);
-                            console.log('Form:', form);
-
-                            // Set the keyword value
-                            searchInput.value = '$keyword';
-                            searchInput.focus();
-
-                            // Trigger input events to activate any JavaScript listeners
-                            searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-                            searchInput.dispatchEvent(new Event('change', { bubbles: true }));
-                            searchInput.dispatchEvent(new Event('keyup', { bubbles: true }));
-
-                            // Wait a moment for any VRF population, then try form submission
-                            setTimeout(() => {
-                                console.log('VRF field value after input:', hiddenVrf?.value);
-
-                                // Try pressing Enter to trigger search/navigation
-                                const enterEvent = new KeyboardEvent('keydown', {
-                                    key: 'Enter',
-                                    keyCode: 13,
-                                    which: 13,
-                                    bubbles: true,
-                                    cancelable: true
-                                });
-                                searchInput.dispatchEvent(enterEvent);
-
-                                // Also try the keypress event
-                                const keypressEvent = new KeyboardEvent('keypress', {
-                                    key: 'Enter',
-                                    keyCode: 13,
-                                    which: 13,
-                                    bubbles: true,
-                                    cancelable: true
-                                });
-                                searchInput.dispatchEvent(keypressEvent);
-
-                                // If we have a populated VRF, try form submission
-                                if (hiddenVrf?.value || form) {
-                                    setTimeout(() => {
-                                        if (form) {
-                                            console.log('Submitting form');
-                                            form.submit();
-                                        }
-                                    }, 500);
-                                }
-                            }, 1000);
-
-                        } else {
-                            console.log('Could not find search input with selector: .search-inner input[name=keyword]');
-                        }
-                    }, 3000); // 3 second delay for full page load
-
-                    // Return true for AJAX search requests OR navigation with VRF
-                    return (url.includes('/ajax/manga/search') && url.includes('vrf=')) ||
-                           (url.includes('/filter') && url.includes('vrf=')) ||
-                           url.includes('vrf=');
-                """.trimIndent()
-            )
-
-            // Extract VRF from intercepted requests (AJAX or navigation)
-            interceptedRequests.firstNotNullOfOrNull { request ->
-                val vrf = request.getQueryParameter("vrf")
-                if (vrf?.isNotEmpty() == true) {
-                    vrf
-                } else null
-            }
-        }
-        primaryOutcome.value?.let { return it }
-        lastError = primaryOutcome.error ?: lastError
-
-        val message = "Unable to extract search VRF for keyword: $keyword from page: https://$domain/"
-        lastError?.let { throw Exception(message, it) }
-        throw Exception(message)
+        return intercepted.firstNotNullOfOrNull { it.getQueryParameter("vrf") }
+            ?: throw IllegalStateException("Unable to extract search VRF for keyword: $keyword from https://${domain}/")
     }
+
 
     /**
      * Extract VRF token for individual volume images from the actual volume page

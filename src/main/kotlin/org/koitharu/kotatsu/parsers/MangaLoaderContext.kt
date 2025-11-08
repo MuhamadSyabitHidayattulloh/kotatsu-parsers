@@ -10,6 +10,7 @@ import org.koitharu.kotatsu.parsers.config.MangaSourceConfig
 import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.koitharu.kotatsu.parsers.model.MangaSource
 import org.koitharu.kotatsu.parsers.webview.InterceptedRequest
+import org.koitharu.kotatsu.parsers.webview.InterceptionConfig
 import org.koitharu.kotatsu.parsers.util.LinkResolver
 import java.util.*
 
@@ -92,6 +93,24 @@ public abstract class MangaLoaderContext {
         timeout: Long = 30000L
     ): List<InterceptedRequest> {
         throw UnsupportedOperationException("WebView request interception is not available")
+    }
+
+    /**
+     * Intercept WebView requests with advanced configuration
+     * Loads the specified URL in a WebView and captures HTTP requests that match the filter criteria.
+     * Supports separate page script injection and request filtering.
+     *
+     * @param url The URL to load in the WebView
+     * @param config Configuration including page script, filter script, timeout, etc.
+     * @return List of intercepted requests matching the filter criteria
+     */
+    public open suspend fun interceptWebViewRequests(
+        url: String,
+        config: InterceptionConfig
+    ): List<InterceptedRequest> {
+        // Fallback to the simple version for backward compatibility
+        val script = config.filterScript ?: "return true;"
+        return interceptWebViewRequests(url, script, config.timeoutMs)
     }
 
     /**

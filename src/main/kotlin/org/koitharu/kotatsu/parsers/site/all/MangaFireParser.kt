@@ -316,40 +316,64 @@ internal abstract class MangaFireParser(
      * Extract VRF token for search from the main page using webview injection
      * Pattern: /ajax/manga/search?keyword=xxx&vrf=xxx
      */
-    private suspend fun extractSearchVrf(keyword: String): String {
+private suspend fun extractSearchVrf(keyword: String): String {
         val kw = keyword.replace("'", "\\'")
-        val interceptorScript = """
-        /*__PAGE_SCRIPT_START__*/
-        (function(){
-          const kw='${kw}';
-          const input=document.querySelector('.search-inner input[name=keyword]');
-          const form=document.querySelector('.search-inner form');
-          if(!input){ console.log('[MF_VRF] input not found'); return; }
-          input.value=kw;
-          input.focus();
-          input.dispatchEvent(new Event('input',{bubbles:true}));
-          input.dispatchEvent(new Event('change',{bubbles:true}));
-          input.dispatchEvent(new Event('keyup',{bubbles:true}));
-          const e=new KeyboardEvent('keydown',{key:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true});
-          input.dispatchEvent(e);
-          setTimeout(()=>{ try{ form && form.submit(); }catch(_){ } },400);
-        })();
-        /*__PAGE_SCRIPT_END__*/
-        return (url.includes('/ajax/manga/search') && url.includes('vrf=')) ||
-               (url.includes('/filter') && url.includes('vrf=')) ||
-               url.includes('vrf=');
-    """.trimIndent()
+        var lastError: Throwable? = null
 
-        val intercepted = context.interceptWebViewRequests(
-            url = "https://${domain}/",
-            interceptorScript = interceptorScript,
-            timeout = 12000L
-        )
+        val primaryOutcome = retryUntilNotNull<String>(
+            attempts = 3,
+            delayMs = 1000L
+        ) {
+            val pageJs = """
+            (function(){
+              const kw='${kw}';
+              function trigger(){
+                const input=document.querySelector('.search-inner input[name=keyword]');
+                const form=document.querySelector('.search-inner form');
+                if(!input){ return false; }
+                input.value=kw;
+                input.focus();
+                input.dispatchEvent(new Event('input',{bubbles:true}));
+                input.dispatchEvent(new Event('change',{bubbles:true}));
+                input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}));
+                setTimeout(()=>{ try{ form && form.submit(); }catch(_){ } },300);
+                return true;
+              }
+              if(!trigger()){
+                const t=setInterval(()=>{ if(trigger()){ clearInterval(t); } },150);
+                setTimeout(()=>clearInterval(t),5000);
+              }
+            })();
+            """.trimIndent()
 
-        return intercepted.firstNotNullOfOrNull { it.getQueryParameter("vrf") }
-            ?: throw IllegalStateException("Unable to extract search VRF for keyword: $keyword from https://${domain}/")
+            val filterJs = """
+            return (url.includes('/ajax/manga/search') && url.includes('vrf=')) ||
+                   (url.includes('/filter') && url.includes('vrf=')) ||
+                    url.includes('vrf=');
+            """.trimIndent()
+
+            val config = org.koitharu.kotatsu.parsers.webview.InterceptionConfig(
+                timeoutMs = 20000L,          // give the page time to run the JS and fire XHR
+                pageScript = pageJs,         // this injects and executes in the WebView
+                filterScript = filterJs,     // this is only the predicate
+                maxRequests = 30
+            )
+
+            val intercepted = context.interceptWebViewRequests(
+                url = "https://${domain}/",
+                config = config
+            )
+
+            intercepted.firstNotNullOfOrNull { it.getQueryParameter("vrf") }
+        }
+
+        primaryOutcome.value?.let { return it }
+        lastError = primaryOutcome.error ?: lastError
+
+        val message = "Unable to extract search VRF for keyword: $keyword from page: https://$domain/"
+        lastError?.let { throw Exception(message, it) }
+        throw Exception(message)
     }
-
 
     /**
      * Extract VRF token for individual volume images from the actual volume page

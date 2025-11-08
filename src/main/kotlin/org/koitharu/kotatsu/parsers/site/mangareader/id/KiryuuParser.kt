@@ -1,6 +1,5 @@
 package org.koitharu.kotatsu.parsers.site.mangareader.id
 
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
@@ -40,10 +39,9 @@ internal class KiryuuParser(context: MangaLoaderContext) :
 				?: "eadaed75c9" // Fallback from intercepted request
 
 			// Make AJAX search request - based on intercepted request, body is just the query
-			val requestBody = query.toRequestBody(null)
 			val searchUrl = "https://$domain/wp-admin/admin-ajax.php?nonce=$nonce&action=search"
 
-			val response = webClient.httpPost(searchUrl, requestBody)
+			val response = webClient.httpPost(searchUrl, query)
 
 			val searchResults = response.parseHtml()
 

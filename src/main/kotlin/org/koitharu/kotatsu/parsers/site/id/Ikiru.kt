@@ -3,6 +3,7 @@ package org.koitharu.kotatsu.parsers.site.id
 import okhttp3.Headers
 import org.json.JSONArray
 import org.jsoup.nodes.Document
+import org.koitharu.kotatsu.parsers.Broken
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
@@ -35,6 +36,7 @@ import java.util.Calendar
 import java.util.EnumSet
 import java.util.Locale
 
+@Broken
 @MangaSourceParser("IKIRU", "Ikiru", "id")
 internal class Ikiru(context: MangaLoaderContext) :
 	PagedMangaParser(context, MangaParserSource.IKIRU, 24, 24) {

@@ -57,11 +57,14 @@ import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 import kotlin.math.min
+import kotlin.random.Random
 
 private const val PIECE_SIZE = 200
 private const val MIN_SPLIT_COUNT = 5
-private const val VRF_RETRY_ATTEMPTS = 3
-private const val VRF_RETRY_DELAY_MS = 350L
+private const val VRF_RETRY_ATTEMPTS = 4 // Total attempts (1 initial + 3 retries)
+private const val VRF_INITIAL_DELAY_MS = 1500L // Start with a longer delay
+private const val VRF_MAX_DELAY_MS = 8000L // Cap the delay to 8 seconds
+private const val VRF_BACKOFF_FACTOR = 2.0
 
 @Suppress("CustomX509TrustManager")
 internal abstract class MangaFireParser(
@@ -131,32 +134,56 @@ internal abstract class MangaFireParser(
 
     private val vrfParamRegex = Regex("[?&]vrf=([^&]+)")
 
+    // Result holder for retry helpers (kept private to this parser)
     private data class RetryOutcome<T>(
         val value: T?,
         val error: Throwable?,
     )
 
-    private suspend fun <T> retryUntilNotNull(
+    // New backoff-based retry (kept private to avoid exposing private type)
+    private suspend fun <T> retryWithBackoff(
         attempts: Int = VRF_RETRY_ATTEMPTS,
-        delayMs: Long = VRF_RETRY_DELAY_MS,
-        block: suspend () -> T?,
+        initialDelayMs: Long = VRF_INITIAL_DELAY_MS,
+        maxDelayMs: Long = VRF_MAX_DELAY_MS,
+        backoffFactor: Double = VRF_BACKOFF_FACTOR,
+        block: suspend (attempt: Int) -> T?,
     ): RetryOutcome<T> {
         var lastError: Throwable? = null
-        repeat(attempts) { attempt ->
+        var currentDelay = initialDelayMs
+
+        for (attempt in 1..attempts) {
             try {
-                val result = block()
+                val result = block(attempt)
                 if (result != null) {
                     return RetryOutcome(result, null)
                 }
             } catch (e: Throwable) {
                 lastError = e
             }
-            if (attempt < attempts - 1) {
-                delay(delayMs)
-            }
+
+            if (attempt == attempts) break
+            val jitter = (currentDelay * 0.25 * Random.nextDouble()).toLong()
+            val effectiveDelay = currentDelay + jitter
+            delay(effectiveDelay)
+            currentDelay = (currentDelay * backoffFactor).toLong().coerceAtMost(maxDelayMs)
         }
         return RetryOutcome(null, lastError)
     }
+
+    // Compatibility wrapper for existing call sites; uses the new retryWithBackoff under the hood.
+    private suspend fun <T> retryUntilNotNull(
+        attempts: Int = VRF_RETRY_ATTEMPTS,
+        delayMs: Long = VRF_INITIAL_DELAY_MS,
+        maxDelayMs: Long = VRF_MAX_DELAY_MS,
+        backoffFactor: Double = VRF_BACKOFF_FACTOR,
+        block: suspend (attempt: Int) -> T?,
+    ): RetryOutcome<T> = retryWithBackoff(
+        attempts = attempts,
+        initialDelayMs = delayMs,
+        maxDelayMs = maxDelayMs,
+        backoffFactor = backoffFactor,
+        block = block,
+    )
 
     private fun extractVrfFromUrls(urls: List<String>): String? {
         return urls.firstNotNullOfOrNull { url ->
@@ -316,7 +343,7 @@ internal abstract class MangaFireParser(
      * Extract VRF token for search from the main page using webview injection
      * Pattern: /ajax/manga/search?keyword=xxx&vrf=xxx
      */
-private suspend fun extractSearchVrf(keyword: String): String {
+    private suspend fun extractSearchVrf(keyword: String): String {
         val kw = keyword.replace("'", "\\'")
         var lastError: Throwable? = null
 
@@ -486,23 +513,16 @@ private suspend fun extractSearchVrf(keyword: String): String {
                 require(mangaId != null && type != null && langCode != null) {
                     "mangaId, type, and langCode are required for chapter_list operation"
                 }
-                // Don't cache chapter list VRF - each request needs its own unique token
                 val vrf = extractChapterListVrf(mangaId, type, langCode)
                 vrf
             }
             "chapter_images" -> {
-                // Chapter images VRF extraction is now handled directly in getPages() function
-                // to properly pass the chapter number for URL construction
                 throw IllegalStateException("chapter_images VRF should be extracted directly via extractChapterImagesVrf(), not through extractVrfToken()")
             }
             "volume_images" -> {
-                // Volume images VRF extraction is now handled directly in getPages() function
-                // to properly pass the volume number for URL construction
                 throw IllegalStateException("volume_images VRF should be extracted directly via extractVolumeImagesVrf(), not through extractVrfToken()")
             }
             "search" -> {
-                // Search VRF extraction is now handled directly by extractSearchVrf() method
-                // This case should no longer be used
                 throw IllegalStateException("search VRF should be extracted directly via extractSearchVrf(), not through extractVrfToken()")
             }
             else -> {
@@ -527,7 +547,6 @@ private suspend fun extractSearchVrf(keyword: String): String {
                     ).parseJson()
 
                     // Parse search results from JSON response
-                    // Response format: {"status":200,"result":{"count":1,"html":"...Eleceed..."}}
                     val resultObj = searchResponse.getJSONObject("result")
                     val htmlContent = resultObj.getString("html")
                     println("[MF_VRF] Search result count: ${resultObj.getInt("count")}")

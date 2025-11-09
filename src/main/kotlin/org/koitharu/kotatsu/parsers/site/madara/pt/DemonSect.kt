@@ -191,11 +191,11 @@ internal class DemonSect(context: MangaLoaderContext) :
 	}
 
 	private suspend fun loadChapters(mangaUrl: String, doc: Document): List<MangaChapter> {
-		// Extract expected chapter count from the page
+		// Extract total chapter count from "Chapters: 202" text
 		val totalChapters = extractChapterCount(doc)
 
 		if (totalChapters > 0) {
-			// Generate all chapters based on count since they're just numbered sequentially
+			// Generate all chapters from 1 to totalChapters
 			return (1..totalChapters).map { chapterNum ->
 				val chapterUrl = "${mangaUrl.removeSuffix("/")}/capitulo-$chapterNum/"
 
@@ -213,16 +213,45 @@ internal class DemonSect(context: MangaLoaderContext) :
 			}
 		}
 
-		// Fallback to parsing if count extraction fails
-		return parseChaptersFromPage(doc)
+		return emptyList()
 	}
 
 	private fun extractChapterCount(doc: Document): Int {
-		// Extract from "Chapters: 202" format
-		val chapterHeading = doc.selectFirst(".c-blog__heading h2, .c-blog__heading .h4")?.text()?.trim()
-		return chapterHeading?.let {
-			Regex("Chapters:\\s*(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull()
-		} ?: 0
+		// Try multiple selectors and patterns to find chapter count
+		val selectors = listOf(
+			".c-blog__heading h2",
+			".c-blog__heading .h4",
+			".wp-manga-chapter-count",
+			".chapter-count",
+			"h2:contains(Chapters)",
+			"h2:contains(Capítulos)"
+		)
+
+		for (selector in selectors) {
+			val element = doc.selectFirst(selector)
+			if (element != null) {
+				val text = element.text().trim()
+				// Try multiple regex patterns
+				val patterns = listOf(
+					"Chapters?:\\s*(\\d+)",
+					"Capítulos?:\\s*(\\d+)",
+					"(\\d+)\\s+Chapters?",
+					"(\\d+)\\s+Capítulos?"
+				)
+
+				for (pattern in patterns) {
+					val match = Regex(pattern, RegexOption.IGNORE_CASE).find(text)
+					if (match != null) {
+						val count = match.groupValues[1].toIntOrNull()
+						if (count != null && count > 0) {
+							return count
+						}
+					}
+				}
+			}
+		}
+
+		return 0
 	}
 
 	private fun parseChaptersFromPage(doc: Document): List<MangaChapter> {

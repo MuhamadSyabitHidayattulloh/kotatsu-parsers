@@ -177,27 +177,11 @@ internal class DemonSect(context: MangaLoaderContext) :
 			element.text().trim().takeIf { it.isNotBlank() }
 		}
 
-		// Get chapters via AJAX
-		val chapters = loadChapters(manga.url, doc)
-
-		return manga.copy(
-			description = description,
-			coverUrl = coverUrl,
-			tags = tags,
-			authors = authors,
-			state = status,
-			chapters = chapters
-		)
-	}
-
-	private suspend fun loadChapters(mangaUrl: String, doc: Document): List<MangaChapter> {
-		// Extract total chapter count from "Chapters: 202" text
+		// Generate all chapters based on chapter count
 		val totalChapters = extractChapterCount(doc)
-
-		if (totalChapters > 0) {
-			// Generate all chapters from 1 to totalChapters
-			return (1..totalChapters).map { chapterNum ->
-				val chapterUrl = "${mangaUrl.removeSuffix("/")}/cap-$chapterNum/"
+		val chapters = if (totalChapters > 0) {
+			(1..totalChapters).map { chapterNum ->
+				val chapterUrl = "${manga.url.removeSuffix("/")}/cap-$chapterNum/"
 
 				MangaChapter(
 					id = generateUid(chapterUrl),
@@ -211,10 +195,18 @@ internal class DemonSect(context: MangaLoaderContext) :
 					branch = null,
 				)
 			}
-		}
+		} else emptyList()
 
-		return emptyList()
+		return manga.copy(
+			description = description,
+			coverUrl = coverUrl,
+			tags = tags,
+			authors = authors,
+			state = status,
+			chapters = chapters
+		)
 	}
+
 
 	private fun extractChapterCount(doc: Document): Int {
 		// Try multiple selectors and patterns to find chapter count

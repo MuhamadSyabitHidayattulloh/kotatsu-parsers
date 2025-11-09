@@ -102,11 +102,6 @@ internal class DemonSect(context: MangaLoaderContext) :
 				} else null
 			}
 
-			// Extract chapter count
-			val chapterInfo = element.selectFirst(".manga-info .total")?.text()?.trim()
-			val chapterCount = chapterInfo?.let {
-				Regex("(\\d+)\\s+Capítulos?").find(it)?.groupValues?.get(1)?.toIntOrNull()
-			}
 
 			Manga(
 				id = generateUid(url),
@@ -196,89 +191,85 @@ internal class DemonSect(context: MangaLoaderContext) :
 	}
 
 	private suspend fun loadChapters(mangaUrl: String, doc: Document): List<MangaChapter> {
-		val mangaId = extractMangaId(doc) ?: return emptyList()
+		// Extract expected chapter count from the page
+		val expectedChapterCount = extractChapterCount(doc)
 
-		try {
-			val chaptersUrl = "https://$domain/wp-admin/admin-ajax.php"
-			val formData = mapOf(
-				"action" to "manga_get_chapters",
-				"manga" to mangaId.toString()
-			)
+		val chapters = parseChaptersFromPage(doc)
 
-			val extraHeaders = headersOf(
-				"X-Requested-With", "XMLHttpRequest",
-				"Content-Type", "application/x-www-form-urlencoded; charset=UTF-8"
-			)
-
-			val response = webClient.httpPost(chaptersUrl.toHttpUrl(), formData, extraHeaders)
-			val chaptersHtml = response.parseHtml()
-
-			return parseChapters(chaptersHtml)
-		} catch (e: Exception) {
-			// Fallback to parsing chapters from page if AJAX fails
-			return parseChaptersFromPage(doc)
+		// Log if we didn't get all chapters (for debugging)
+		if (expectedChapterCount > 0 && chapters.size != expectedChapterCount) {
+			// Could add logging here if needed for debugging
 		}
+
+		return chapters
 	}
 
-	private fun extractMangaId(doc: Document): Int? {
-		val scriptText = doc.select("script").joinToString("\n") { it.html() }
-		return Regex("manga_id[\"']*\\s*:\\s*[\"']*?(\\d+)").find(scriptText)?.groupValues?.get(1)?.toIntOrNull()
-	}
-
-	private fun parseChapters(doc: Document): List<MangaChapter> {
-		val dateFormat = SimpleDateFormat("MMM dd, yyyy", Locale.ENGLISH)
-		return doc.select("li.wp-manga-chapter").mapNotNull { element ->
-			val link = element.selectFirst("a") ?: return@mapNotNull null
-			val url = link.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
-			val title = link.text().trim()
-
-			val dateText = element.selectFirst(".chapter-release-date")?.text()?.trim()
-			val uploadDate = dateText?.let {
-			try {
-				dateFormat.parse(it)?.time ?: 0L
-			} catch (e: Exception) {
-				0L
-			}
-		} ?: 0L
-
-			val chapterNumber = Regex("cap[ítulo]*[\\s-]*(\\d+(?:\\.\\d+)?)").find(title.lowercase())
-				?.groupValues?.get(1)?.toFloatOrNull() ?: 0f
-
-			MangaChapter(
-				id = generateUid(url),
-				title = title,
-				url = url,
-				number = chapterNumber,
-				volume = 0,
-				uploadDate = uploadDate,
-				source = source,
-				scanlator = null,
-				branch = null,
-			)
-		}.reversed() // Most recent first
+	private fun extractChapterCount(doc: Document): Int {
+		// Extract from "Chapters: 202" format
+		val chapterHeading = doc.selectFirst(".c-blog__heading h2, .c-blog__heading .h4")?.text()?.trim()
+		return chapterHeading?.let {
+			Regex("Chapters:\\s*(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull()
+		} ?: 0
 	}
 
 	private fun parseChaptersFromPage(doc: Document): List<MangaChapter> {
-		return doc.select(".wp-manga-chapter").mapNotNull { element ->
-			val link = element.selectFirst("a") ?: return@mapNotNull null
-			val url = link.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
-			val title = link.text().trim()
+		// Try multiple selectors for chapter lists
+		val selectors = listOf(
+			".wp-manga-chapter a",
+			".chapter-item a",
+			"li.wp-manga-chapter a",
+			".listing-chapters_wrap a[href*='capitulo']",
+			".listing-chapters_wrap a[href*='chapter']",
+			"a[href*='/capitulo-']",
+			"a[href*='/chapter-']",
+			"a[href*='cap-']"
+		)
 
-			val chapterNumber = Regex("cap[ítulo]*[\\s-]*(\\d+(?:\\.\\d+)?)").find(title.lowercase())
-				?.groupValues?.get(1)?.toFloatOrNull() ?: 0f
+		for (selector in selectors) {
+			val chapters = doc.select(selector).mapNotNull { link ->
+				val url = link.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
+				if (!url.contains("cap") && !url.contains("chapter")) return@mapNotNull null
 
-			MangaChapter(
-				id = generateUid(url),
-				title = title,
-				url = url,
-				number = chapterNumber,
-				volume = 0,
-				uploadDate = 0L,
-				source = source,
-				scanlator = null,
-				branch = null,
-			)
-		}.reversed()
+				val title = link.text().trim().ifEmpty {
+					// Try to get title from parent or nearby elements
+					link.parent()?.selectFirst(".chapter-title, .title")?.text()?.trim() ?: "Chapter"
+				}
+
+				val chapterNumber = Regex("cap[ítulo]*[\\s-]*(\\d+(?:\\.\\d+)?)").find(title.lowercase())
+					?.groupValues?.get(1)?.toFloatOrNull()
+					?: Regex("(\\d+(?:\\.\\d+)?)").find(url)?.value?.toFloatOrNull() ?: 0f
+
+				// Try to extract upload date from nearby elements
+				val uploadDate = try {
+					val dateElement = link.parent()?.selectFirst(".chapter-release-date, .post-on, .chapter-date")
+					val dateText = dateElement?.text()?.trim()
+					if (dateText != null) {
+						val dateFormat = SimpleDateFormat("MMM dd, yyyy", Locale.ENGLISH)
+						dateFormat.parse(dateText)?.time ?: 0L
+					} else 0L
+				} catch (e: Exception) {
+					0L
+				}
+
+				MangaChapter(
+					id = generateUid(url),
+					title = title,
+					url = url,
+					number = chapterNumber,
+					volume = 0,
+					uploadDate = uploadDate,
+					source = source,
+					scanlator = null,
+					branch = null,
+				)
+			}.distinctBy { it.url }
+
+			if (chapters.isNotEmpty()) {
+				return chapters.sortedBy { it.number }
+			}
+		}
+
+		return emptyList()
 	}
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {

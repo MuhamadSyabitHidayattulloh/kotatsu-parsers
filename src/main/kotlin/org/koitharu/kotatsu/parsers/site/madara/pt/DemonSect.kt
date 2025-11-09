@@ -43,6 +43,11 @@ internal class DemonSect(context: MangaLoaderContext) :
 	}
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
+		// Handle search separately
+		if (!filter.query.isNullOrEmpty()) {
+			return performSearch(filter.query)
+		}
+
 		val url = "https://$domain/projetos/".toHttpUrl().newBuilder().apply {
 			addQueryParameter("page", page.toString())
 
@@ -53,11 +58,6 @@ internal class DemonSect(context: MangaLoaderContext) :
 				SortOrder.ALPHABETICAL -> addQueryParameter("orderby", "title")
 				SortOrder.RATING -> addQueryParameter("orderby", "rating")
 				else -> {}
-			}
-
-			if (!filter.query.isNullOrEmpty()) {
-				// Use AJAX search
-				return performSearch(filter.query)
 			}
 
 			filter.tags.forEach { tag ->
@@ -177,25 +177,8 @@ internal class DemonSect(context: MangaLoaderContext) :
 			element.text().trim().takeIf { it.isNotBlank() }
 		}
 
-		// Generate all chapters based on chapter count
-		val totalChapters = extractChapterCount(doc)
-		val chapters = if (totalChapters > 0) {
-			(1..totalChapters).map { chapterNum ->
-				val chapterUrl = "${manga.url.removeSuffix("/")}/cap-$chapterNum/"
-
-				MangaChapter(
-					id = generateUid(chapterUrl),
-					title = "Capítulo $chapterNum",
-					url = chapterUrl,
-					number = chapterNum.toFloat(),
-					volume = 0,
-					uploadDate = 0L,
-					source = source,
-					scanlator = null,
-					branch = null,
-				)
-			}
-		} else emptyList()
+		// Parse actual chapters from the page
+		val chapters = parseChaptersFromPage(doc)
 
 		return manga.copy(
 			description = description,
@@ -209,26 +192,20 @@ internal class DemonSect(context: MangaLoaderContext) :
 
 
 	private fun extractChapterCount(doc: Document): Int {
-		// Try multiple selectors and patterns to find chapter count
-		val selectors = listOf(
-			".c-blog__heading h2",
-			".c-blog__heading .h4",
-			".wp-manga-chapter-count",
-			".chapter-count",
-			"h2:contains(Chapters)",
-			"h2:contains(Capítulos)"
-		)
+		// Try to find any heading with chapter information
+		val allHeadings = doc.select("h1, h2, h3, h4, h5, .heading, .title")
 
-		for (selector in selectors) {
-			val element = doc.selectFirst(selector)
-			if (element != null) {
-				val text = element.text().trim()
+		for (heading in allHeadings) {
+			val text = heading.text().trim()
+			if (text.contains("chapter", ignoreCase = true) || text.contains("capítulo", ignoreCase = true)) {
 				// Try multiple regex patterns
 				val patterns = listOf(
 					"Chapters?:\\s*(\\d+)",
 					"Capítulos?:\\s*(\\d+)",
-					"(\\d+)\\s+Chapters?",
-					"(\\d+)\\s+Capítulos?"
+					"(\\d+)\\s*Chapters?",
+					"(\\d+)\\s*Capítulos?",
+					"Total:\\s*(\\d+)",
+					"(\\d+)\\s*$" // Just a number at the end
 				)
 
 				for (pattern in patterns) {
@@ -243,67 +220,55 @@ internal class DemonSect(context: MangaLoaderContext) :
 			}
 		}
 
-		return 0
+		// Fallback: look for any element containing just numbers that might be chapter count
+		val possibleCounts = doc.select("*").mapNotNull { element ->
+			val text = element.ownText().trim()
+			if (text.matches(Regex("\\d{2,3}"))) { // 2-3 digit numbers (likely chapter counts)
+				text.toIntOrNull()
+			} else null
+		}.filter { it > 10 && it < 1000 } // Reasonable chapter count range
+
+		return possibleCounts.maxOrNull() ?: 0
 	}
 
 	private fun parseChaptersFromPage(doc: Document): List<MangaChapter> {
-		// Try multiple selectors for chapter lists
-		val selectors = listOf(
-			".wp-manga-chapter a",
-			".chapter-item a",
-			"li.wp-manga-chapter a",
-			".listing-chapters_wrap a[href*='capitulo']",
-			".listing-chapters_wrap a[href*='chapter']",
-			"a[href*='/capitulo-']",
-			"a[href*='/chapter-']",
-			"a[href*='cap-']"
-		)
+		// Parse the specific structure shown in the HTML
+		val chapters = doc.select("li.wp-manga-chapter").mapNotNull { li ->
+			val link = li.selectFirst("a") ?: return@mapNotNull null
+			val url = link.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
+			val title = link.text().trim()
 
-		for (selector in selectors) {
-			val chapters = doc.select(selector).mapNotNull { link ->
-				val url = link.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
-				if (!url.contains("cap") && !url.contains("chapter")) return@mapNotNull null
+			// Extract chapter number from title or URL
+			val chapterNumber = Regex("Cap\\.?\\s*(\\d+)").find(title)?.groupValues?.get(1)?.toFloatOrNull()
+				?: Regex("/cap-(\\d+)/?$").find(url)?.groupValues?.get(1)?.toFloatOrNull() ?: 0f
 
-				val title = link.text().trim().ifEmpty {
-					// Try to get title from parent or nearby elements
-					link.parent()?.selectFirst(".chapter-title, .title")?.text()?.trim() ?: "Chapter"
-				}
-
-				val chapterNumber = Regex("cap[ítulo]*[\\s-]*(\\d+(?:\\.\\d+)?)").find(title.lowercase())
-					?.groupValues?.get(1)?.toFloatOrNull()
-					?: Regex("(\\d+(?:\\.\\d+)?)").find(url)?.value?.toFloatOrNull() ?: 0f
-
-				// Try to extract upload date from nearby elements
-				val uploadDate = try {
-					val dateElement = link.parent()?.selectFirst(".chapter-release-date, .post-on, .chapter-date")
-					val dateText = dateElement?.text()?.trim()
-					if (dateText != null) {
-						val dateFormat = SimpleDateFormat("MMM dd, yyyy", Locale.ENGLISH)
-						dateFormat.parse(dateText)?.time ?: 0L
-					} else 0L
-				} catch (e: Exception) {
-					0L
-				}
-
-				MangaChapter(
-					id = generateUid(url),
-					title = title,
-					url = url,
-					number = chapterNumber,
-					volume = 0,
-					uploadDate = uploadDate,
-					source = source,
-					scanlator = null,
-					branch = null,
-				)
-			}.distinctBy { it.url }
-
-			if (chapters.isNotEmpty()) {
-				return chapters.sortedBy { it.number }
+			// Extract upload date from the chapter-release-date span
+			val uploadDate = try {
+				val dateElement = li.selectFirst(".chapter-release-date .timediff")
+				val dateText = dateElement?.text()?.trim()?.removeSurrounding("", "")
+				if (dateText != null) {
+					// Parse Portuguese date format: "outubro 19, 2025"
+					val dateFormat = SimpleDateFormat("MMMM dd, yyyy", Locale("pt", "BR"))
+					dateFormat.parse(dateText)?.time ?: 0L
+				} else 0L
+			} catch (e: Exception) {
+				0L
 			}
-		}
 
-		return emptyList()
+			MangaChapter(
+				id = generateUid(url),
+				title = title,
+				url = url,
+				number = chapterNumber,
+				volume = 0,
+				uploadDate = uploadDate,
+				source = source,
+				scanlator = null,
+				branch = null,
+			)
+		}.sortedBy { it.number }
+
+		return chapters
 	}
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {

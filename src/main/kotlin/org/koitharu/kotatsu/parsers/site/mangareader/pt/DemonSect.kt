@@ -9,7 +9,7 @@ import org.koitharu.kotatsu.parsers.site.mangareader.MangaReaderParser
 @MangaSourceParser("DEMONSECT", "DemonSect", "pt")
 internal class DemonSect(context: MangaLoaderContext) :
 	MangaReaderParser(context, MangaParserSource.DEMONSECT, "seitacelestial.com", pageSize = 20, searchPageSize = 10) {
-	override val listUrl = "/comics"
+	override val listUrl = "/projetos"
 
 	override val filterCapabilities: MangaListFilterCapabilities
 		get() = super.filterCapabilities.copy(

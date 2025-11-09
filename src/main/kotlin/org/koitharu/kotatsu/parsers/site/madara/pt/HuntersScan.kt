@@ -3,6 +3,7 @@ package org.koitharu.kotatsu.parsers.site.madara.pt
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import okhttp3.Protocol
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
@@ -13,6 +14,7 @@ import org.koitharu.kotatsu.parsers.model.MangaChapter
 import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.koitharu.kotatsu.parsers.model.MangaState
 import org.koitharu.kotatsu.parsers.model.RATING_UNKNOWN
+import org.koitharu.kotatsu.parsers.network.OkHttpWebClient
 import org.koitharu.kotatsu.parsers.site.madara.MadaraParser
 import org.koitharu.kotatsu.parsers.util.attrAsRelativeUrl
 import org.koitharu.kotatsu.parsers.util.generateUid
@@ -31,6 +33,14 @@ internal class HuntersScan(context: MangaLoaderContext) :
 	override val datePattern = "dd/MM/yyyy"
 	override val tagPrefix = "series-genre/"
 	override val listUrl = "series/"
+
+	// Override webClient to force HTTP/1.1 to fix 421 SNI mismatch error
+	override val webClient = OkHttpWebClient(
+		httpClient = context.httpClient.newBuilder()
+			.protocols(listOf(Protocol.HTTP_1_1))
+			.build(),
+		source = source
+	)
 
 	override suspend fun getChapters(manga: Manga, doc: Document): List<MangaChapter> {
 		return fetchAllChapters(manga)

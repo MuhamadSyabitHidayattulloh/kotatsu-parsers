@@ -36,47 +36,82 @@ internal class DemonSect(context: MangaLoaderContext) :
 
 	override suspend fun getFilterOptions(): MangaListFilterOptions {
 		return MangaListFilterOptions(
-			availableTags = emptySet(), // Don't load tags to avoid issues
+			availableTags = getTags(),
 			availableStates = emptySet(),
 			availableContentRating = emptySet(),
 		)
 	}
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
-		// Handle search separately
-		if (!filter.query.isNullOrEmpty()) {
-			return performSearch(filter.query)
-		}
+		val url = "https://$domain/".toHttpUrl().newBuilder().apply {
+			// Use search pattern for all listings
+			if (!filter.query.isNullOrEmpty()) {
+				addQueryParameter("s", filter.query)
+			} else {
+				addQueryParameter("s", "+") // Default search for all manga
+			}
+			addQueryParameter("post_type", "wp-manga")
 
-		val url = "https://$domain/projetos/".toHttpUrl().newBuilder().apply {
-			addQueryParameter("page", page.toString())
-
-			when (order) {
-				SortOrder.UPDATED -> addQueryParameter("orderby", "meta_value_num")
-				SortOrder.POPULARITY -> addQueryParameter("orderby", "meta_value_num")
-				SortOrder.NEWEST -> addQueryParameter("orderby", "date")
-				SortOrder.ALPHABETICAL -> addQueryParameter("orderby", "title")
-				SortOrder.RATING -> addQueryParameter("orderby", "rating")
-				else -> {}
+			if (page > 1) {
+				addQueryParameter("page", page.toString())
 			}
 
+			// Add sorting parameter
+			when (order) {
+				SortOrder.UPDATED -> addQueryParameter("m_orderby", "latest")
+				SortOrder.POPULARITY -> addQueryParameter("m_orderby", "views")
+				SortOrder.NEWEST -> addQueryParameter("m_orderby", "new-manga")
+				SortOrder.ALPHABETICAL -> addQueryParameter("m_orderby", "alphabet")
+				SortOrder.RATING -> addQueryParameter("m_orderby", "rating")
+				else -> {} // Relevance is default
+			}
+
+			// Add genre filters
 			filter.tags.forEach { tag ->
-				addQueryParameter("genre[]", tag.key)
+				addQueryParameter("genre", tag.key)
 			}
 		}.build()
 
 		val doc = webClient.httpGet(url).parseHtml()
-		return parseMangaList(doc)
+		return parseSearchResults(doc) // Use search results parser for all listings
 	}
 
-	private suspend fun performSearch(query: String): List<Manga> {
-		val searchUrl = "https://$domain/".toHttpUrl().newBuilder().apply {
-			addQueryParameter("s", query)
-			addQueryParameter("post_type", "wp-manga")
-		}.build()
-
-		val doc = webClient.httpGet(searchUrl).parseHtml()
-		return parseSearchResults(doc)
+	private suspend fun getTags(): Set<MangaTag> {
+		// Return the genres from your HTML
+		return setOf(
+			MangaTag("aventura", "Aventura", source),
+			MangaTag("comedia", "Comédia", source),
+			MangaTag("cultivo", "Cultivo", source),
+			MangaTag("drama", "Drama", source),
+			MangaTag("dungeons", "Dungeons", source),
+			MangaTag("fantasia", "Fantasia", source),
+			MangaTag("ficcao-cientifica", "Ficção Cientifica", source),
+			MangaTag("harem", "Harém", source),
+			MangaTag("historico", "Histórico", source),
+			MangaTag("isekai", "Isekai", source),
+			MangaTag("magia", "Magia", source),
+			MangaTag("misterio", "Mistério", source),
+			MangaTag("murim", "Murim", source),
+			MangaTag("overpower", "Overpower", source),
+			MangaTag("poderes", "Poderes", source),
+			MangaTag("psicologico", "Psicológico", source),
+			MangaTag("reencarnacao", "Reencarnação", source),
+			MangaTag("regressao", "Regressão", source),
+			MangaTag("retorno", "Retorno", source),
+			MangaTag("romance", "Romance", source),
+			MangaTag("seinen", "Seinen", source),
+			MangaTag("shoujo", "Shoujo", source),
+			MangaTag("shounen", "Shounen", source),
+			MangaTag("sistema", "Sistema", source),
+			MangaTag("sobrenatural", "Sobrenatural", source),
+			MangaTag("torre", "Torre", source),
+			MangaTag("tragedia", "Tragédia", source),
+			MangaTag("vilao", "Vilão", source),
+			MangaTag("vinganca", "Vingança", source),
+			MangaTag("wuxia", "Wuxia", source),
+			MangaTag("artes-marciais", "Artes Marciais", source),
+			MangaTag("acao", "Ação", source),
+		)
 	}
 
 	private fun parseSearchResults(doc: Document): List<Manga> {
@@ -215,11 +250,12 @@ internal class DemonSect(context: MangaLoaderContext) :
 
 		// Generate all chapters from first to last
 		return (firstChapterNum..lastChapterNum).map { chapterNum ->
-			val chapterUrl = "$baseUrl/cap-$chapterNum/"
+			val chapterNumFormatted = String.format("%02d", chapterNum) // Format as 00, 01, 02, etc.
+			val chapterUrl = "$baseUrl/cap-$chapterNumFormatted/"
 
 			MangaChapter(
 				id = generateUid(chapterUrl),
-				title = "Cap. ${String.format("%02d", chapterNum)}", // Format as "Cap. 00", "Cap. 01", etc.
+				title = "Cap. $chapterNumFormatted",
 				url = chapterUrl,
 				number = chapterNum.toFloat(),
 				volume = 0,

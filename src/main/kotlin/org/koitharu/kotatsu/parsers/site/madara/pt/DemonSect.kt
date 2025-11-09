@@ -284,17 +284,4 @@ internal class DemonSect(context: MangaLoaderContext) :
 		}.filter { it.url.isNotEmpty() }
 	}
 
-	private suspend fun getTags(): Set<MangaTag> {
-		val doc = webClient.httpGet("https://$domain/projetos/").parseHtml()
-		return doc.select(".genres-content a, .wp-manga-genre a").mapNotNullToSet { element ->
-			val title = element.text().trim()
-			if (title.isNotBlank()) {
-				MangaTag(
-					key = element.attr("href").substringAfterLast("/").removeSuffix("/"),
-					title = title,
-					source = source,
-				)
-			} else null
-		}
-	}
 }

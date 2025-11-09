@@ -192,16 +192,29 @@ internal class DemonSect(context: MangaLoaderContext) :
 
 	private suspend fun loadChapters(mangaUrl: String, doc: Document): List<MangaChapter> {
 		// Extract expected chapter count from the page
-		val expectedChapterCount = extractChapterCount(doc)
+		val totalChapters = extractChapterCount(doc)
 
-		val chapters = parseChaptersFromPage(doc)
+		if (totalChapters > 0) {
+			// Generate all chapters based on count since they're just numbered sequentially
+			return (1..totalChapters).map { chapterNum ->
+				val chapterUrl = "${mangaUrl.removeSuffix("/")}/capitulo-$chapterNum/"
 
-		// Log if we didn't get all chapters (for debugging)
-		if (expectedChapterCount > 0 && chapters.size != expectedChapterCount) {
-			// Could add logging here if needed for debugging
+				MangaChapter(
+					id = generateUid(chapterUrl),
+					title = "Capítulo $chapterNum",
+					url = chapterUrl,
+					number = chapterNum.toFloat(),
+					volume = 0,
+					uploadDate = 0L,
+					source = source,
+					scanlator = null,
+					branch = null,
+				)
+			}
 		}
 
-		return chapters
+		// Fallback to parsing if count extraction fails
+		return parseChaptersFromPage(doc)
 	}
 
 	private fun extractChapterCount(doc: Document): Int {

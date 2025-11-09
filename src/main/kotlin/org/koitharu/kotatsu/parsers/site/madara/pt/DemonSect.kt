@@ -43,36 +43,40 @@ internal class DemonSect(context: MangaLoaderContext) :
 	}
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
-		val url = "https://$domain/".toHttpUrl().newBuilder().apply {
-			// Use search pattern for all listings
-			if (!filter.query.isNullOrEmpty()) {
-				addQueryParameter("s", filter.query)
-			} else {
-				addQueryParameter("s", "+") // Default search for all manga
-			}
-			addQueryParameter("post_type", "wp-manga")
+		// Build URL manually to avoid encoding issues with "+"
+		val baseUrl = "https://$domain/"
+		val params = mutableListOf<String>()
 
-			if (page > 1) {
-				addQueryParameter("page", page.toString())
-			}
+		// Add search parameter
+		if (!filter.query.isNullOrEmpty()) {
+			params.add("s=${filter.query}")
+		} else {
+			params.add("s=+") // Default search for all manga - no encoding
+		}
+		params.add("post_type=wp-manga")
 
-			// Add sorting parameter
-			when (order) {
-				SortOrder.UPDATED -> addQueryParameter("m_orderby", "latest")
-				SortOrder.POPULARITY -> addQueryParameter("m_orderby", "views")
-				SortOrder.NEWEST -> addQueryParameter("m_orderby", "new-manga")
-				SortOrder.ALPHABETICAL -> addQueryParameter("m_orderby", "alphabet")
-				SortOrder.RATING -> addQueryParameter("m_orderby", "rating")
-				else -> {} // Relevance is default
-			}
+		// Add page parameter
+		if (page > 1) {
+			params.add("page=$page")
+		}
 
-			// Add genre filters
-			filter.tags.forEach { tag ->
-				addQueryParameter("genre", tag.key)
-			}
-		}.build()
+		// Add sorting parameter
+		when (order) {
+			SortOrder.UPDATED -> params.add("m_orderby=latest")
+			SortOrder.POPULARITY -> params.add("m_orderby=views")
+			SortOrder.NEWEST -> params.add("m_orderby=new-manga")
+			SortOrder.ALPHABETICAL -> params.add("m_orderby=alphabet")
+			SortOrder.RATING -> params.add("m_orderby=rating")
+			else -> {} // Relevance is default
+		}
 
-		val doc = webClient.httpGet(url).parseHtml()
+		// Add genre filters
+		filter.tags.forEach { tag ->
+			params.add("genre=${tag.key}")
+		}
+
+		val fullUrl = baseUrl + "?" + params.joinToString("&")
+		val doc = webClient.httpGet(fullUrl).parseHtml()
 		return parseSearchResults(doc) // Use search results parser for all listings
 	}
 

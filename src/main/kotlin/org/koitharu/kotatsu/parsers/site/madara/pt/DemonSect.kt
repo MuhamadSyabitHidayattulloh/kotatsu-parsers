@@ -197,7 +197,7 @@ internal class DemonSect(context: MangaLoaderContext) :
 		if (totalChapters > 0) {
 			// Generate all chapters from 1 to totalChapters
 			return (1..totalChapters).map { chapterNum ->
-				val chapterUrl = "${mangaUrl.removeSuffix("/")}/capitulo-$chapterNum/"
+				val chapterUrl = "${mangaUrl.removeSuffix("/")}/cap-$chapterNum/"
 
 				MangaChapter(
 					id = generateUid(chapterUrl),

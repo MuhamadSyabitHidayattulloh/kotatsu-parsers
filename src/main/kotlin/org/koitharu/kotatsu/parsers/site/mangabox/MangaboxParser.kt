@@ -385,9 +385,7 @@ internal abstract class MangaboxParser(
 		}
 	}
 
-	override fun getRequestHeaders(): Headers = Headers.Builder()
-		.add("User-Agent", config[userAgentKey])
+	override fun getRequestHeaders(): Headers = super.getRequestHeaders().newBuilder()
 		.add("Referer", "https://$domain/")
 		.build()
-
 }

@@ -34,11 +34,9 @@ internal abstract class MangaboxParser(
     // Custom HTTP client with TLS 1.3 and specific cipher to match CloudFlare expectations
     private val customWebClient: WebClient by lazy {
         val httpClient = context.httpClient.newBuilder()
-            .protocols(listOf(Protocol.HTTP_1_1))
             .connectionSpecs(listOf(
                 ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS)
                     .tlsVersions(TlsVersion.TLS_1_3)
-                    .cipherSuites(CipherSuite.TLS_AES_256_GCM_SHA384)
                     .build()
             ))
             .build()

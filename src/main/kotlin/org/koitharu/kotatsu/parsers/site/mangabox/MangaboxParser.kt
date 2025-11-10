@@ -132,18 +132,26 @@ internal abstract class MangaboxParser(
 		if (titleCriteria != null) {
 			val searchTerm = titleCriteria.value.toString()
 			if (searchTerm.isNotBlank()) {
-				// Use the direct search URL format: /search/story/searchterm
-				val searchUrl = "https://${domain}${searchUrl}${searchTerm.replace(" ", "-").lowercase()}"
-				val doc = webClient.httpGet(searchUrl).parseHtml()
+				// Use WebView for search due to JavaScript requirements and Cloudflare protection
+				val searchUrl = "https://${domain}/search/story/${searchTerm.replace(" ", "-").lowercase()}"
+				val doc = webClient.httpGet(searchUrl, useWebView = true).parseHtml()
 
-				return doc.select("div.content-genres-item, div.list-story-item, div.search-story-item").map { div ->
-					val href = div.selectFirstOrThrow("a").attrAsRelativeUrl("href")
+				return doc.select(".item, div.content-genres-item, div.list-story-item, div.search-story-item").mapNotNull { div ->
+					// For .item elements, the link is inside .slide-caption h3 a
+					val linkElement = div.selectFirst(".slide-caption h3 a") ?: div.selectFirst("a")
+					val href = linkElement?.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
+
+					val title = linkElement.text().trim()
+					if (title.isEmpty()) return@mapNotNull null
+
+					val coverUrl = div.selectFirst("img")?.src()
+
 					Manga(
 						id = generateUid(href),
 						url = href,
 						publicUrl = href.toAbsoluteUrl(div.host ?: domain),
-						coverUrl = div.selectFirst("img")?.src(),
-						title = div.selectFirst("h3")?.text().orEmpty(),
+						coverUrl = coverUrl,
+						title = title,
 						altTitles = emptySet(),
 						rating = RATING_UNKNOWN,
 						tags = emptySet(),
@@ -165,14 +173,22 @@ internal abstract class MangaboxParser(
 			val genreUrl = "https://${domain}/genre/${genreKey}?page=$page"
 			val doc = webClient.httpGet(genreUrl).parseHtml()
 
-			return doc.select("div.content-genres-item, div.list-story-item").map { div ->
-				val href = div.selectFirstOrThrow("a").attrAsRelativeUrl("href")
+			return doc.select(".item, div.content-genres-item, div.list-story-item").mapNotNull { div ->
+				// For .item elements, the link is inside .slide-caption h3 a
+				val linkElement = div.selectFirst(".slide-caption h3 a") ?: div.selectFirst("a")
+				val href = linkElement?.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
+
+				val title = linkElement.text().trim()
+				if (title.isEmpty()) return@mapNotNull null
+
+				val coverUrl = div.selectFirst("img")?.src()
+
 				Manga(
 					id = generateUid(href),
 					url = href,
 					publicUrl = href.toAbsoluteUrl(div.host ?: domain),
-					coverUrl = div.selectFirst("img")?.src(),
-					title = div.selectFirst("h3")?.text().orEmpty(),
+					coverUrl = coverUrl,
+					title = title,
 					altTitles = emptySet(),
 					rating = RATING_UNKNOWN,
 					tags = emptySet(),
@@ -188,14 +204,22 @@ internal abstract class MangaboxParser(
 		val listingUrl = "https://${domain}${listUrl}?page=$page"
 		val doc = webClient.httpGet(listingUrl).parseHtml()
 
-		return doc.select("div.content-genres-item, div.list-story-item").map { div ->
-			val href = div.selectFirstOrThrow("a").attrAsRelativeUrl("href")
+		return doc.select(".item, div.content-genres-item, div.list-story-item").mapNotNull { div ->
+			// For .item elements, the link is inside .slide-caption h3 a
+			val linkElement = div.selectFirst(".slide-caption h3 a") ?: div.selectFirst("a")
+			val href = linkElement?.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
+
+			val title = linkElement.text().trim()
+			if (title.isEmpty()) return@mapNotNull null
+
+			val coverUrl = div.selectFirst("img")?.src()
+
 			Manga(
 				id = generateUid(href),
 				url = href,
 				publicUrl = href.toAbsoluteUrl(div.host ?: domain),
-				coverUrl = div.selectFirst("img")?.src(),
-				title = div.selectFirst("h3")?.text().orEmpty(),
+				coverUrl = coverUrl,
+				title = title,
 				altTitles = emptySet(),
 				rating = RATING_UNKNOWN,
 				tags = emptySet(),

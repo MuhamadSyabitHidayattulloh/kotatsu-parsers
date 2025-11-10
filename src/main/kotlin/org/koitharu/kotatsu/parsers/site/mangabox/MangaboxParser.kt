@@ -2,6 +2,7 @@ package org.koitharu.kotatsu.parsers.site.mangabox
 
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import okhttp3.Headers
 import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.config.ConfigKey
@@ -136,31 +137,8 @@ internal abstract class MangaboxParser(
 				val searchUrl = "https://${domain}/search/story/${searchTerm.replace(" ", "-").lowercase()}"
 				val doc = webClient.httpGet(searchUrl).parseHtml()
 
-				return doc.select(".item, div.content-genres-item, div.list-story-item, div.search-story-item").mapNotNull { div ->
-					// For .item elements, the link is inside .slide-caption h3 a
-					val linkElement = div.selectFirst(".slide-caption h3 a") ?: div.selectFirst("a")
-					val href = linkElement?.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
-
-					val title = linkElement.text().trim()
-					if (title.isEmpty()) return@mapNotNull null
-
-					val coverUrl = div.selectFirst("img")?.src()
-
-					Manga(
-						id = generateUid(href),
-						url = href,
-						publicUrl = href.toAbsoluteUrl(div.host ?: domain),
-						coverUrl = coverUrl,
-						title = title,
-						altTitles = emptySet(),
-						rating = RATING_UNKNOWN,
-						tags = emptySet(),
-						authors = emptySet(),
-						state = null,
-						source = source,
-						contentRating = sourceContentRating,
-					)
-				}
+				// Search results might have different structure than homepage carousel
+				return parseSearchResults(doc)
 			}
 		} else if (genreIncludeCriteria != null && genreIncludeCriteria.values.isNotEmpty()) {
 			// Handle genre browsing - use only the first genre
@@ -173,44 +151,48 @@ internal abstract class MangaboxParser(
 			val genreUrl = "https://${domain}/genre/${genreKey}?page=$page"
 			val doc = webClient.httpGet(genreUrl).parseHtml()
 
-			return doc.select(".item, div.content-genres-item, div.list-story-item").mapNotNull { div ->
-				// For .item elements, the link is inside .slide-caption h3 a
-				val linkElement = div.selectFirst(".slide-caption h3 a") ?: div.selectFirst("a")
-				val href = linkElement?.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
-
-				val title = linkElement.text().trim()
-				if (title.isEmpty()) return@mapNotNull null
-
-				val coverUrl = div.selectFirst("img")?.src()
-
-				Manga(
-					id = generateUid(href),
-					url = href,
-					publicUrl = href.toAbsoluteUrl(div.host ?: domain),
-					coverUrl = coverUrl,
-					title = title,
-					altTitles = emptySet(),
-					rating = RATING_UNKNOWN,
-					tags = emptySet(),
-					authors = emptySet(),
-					state = null,
-					source = source,
-					contentRating = sourceContentRating,
-				)
-			}
+			return parseSearchResults(doc)
 		}
 
 		// For regular listing (no search), use the new manga list URL
 		val listingUrl = "https://${domain}${listUrl}?page=$page"
 		val doc = webClient.httpGet(listingUrl).parseHtml()
 
-		return doc.select(".item, div.content-genres-item, div.list-story-item").mapNotNull { div ->
-			// For .item elements, the link is inside .slide-caption h3 a
-			val linkElement = div.selectFirst(".slide-caption h3 a") ?: div.selectFirst("a")
-			val href = linkElement?.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
+		return parseSearchResults(doc)
+	}
 
+	protected open fun parseSearchResults(doc: Document): List<Manga> {
+		// Search results use .story_item, listing uses .item (carousel)
+		val elements = doc.select(".story_item")  // Search results structure
+			.ifEmpty { doc.select(".item") }  // Homepage carousel
+			.ifEmpty { doc.select(".manga-item") }  // Grid layout
+			.ifEmpty { doc.select("div.content-genres-item") }  // Alternative layout
+			.ifEmpty { doc.select("div.list-story-item") }  // List layout
+			.ifEmpty { doc.select("div.search-story-item") }  // Search specific
+			.ifEmpty { doc.select("div[class*='story']") }  // Generic story containers
+			.ifEmpty { doc.select("a[href*='/manga/']").map { it.parent() ?: it } }  // Links to manga
+
+		return elements.mapNotNull { div ->
+			// Handle search result structure (.story_item)
+			val linkElement = if (div.hasClass("story_item")) {
+				div.selectFirst(".story_name a") ?: div.selectFirst("a[href*='/manga/']")
+			} else {
+				// Handle carousel structure (.item)
+				div.selectFirst(".slide-caption h3 a")  // Carousel structure
+					?: div.selectFirst("h3 a")  // Direct h3 link
+					?: div.selectFirst("a[href*='/manga/']")  // Any manga link
+					?: if (div.tagName() == "a") div else null  // Element itself is a link
+			}
+
+			val href = linkElement?.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
+			if (!href.contains("/manga/")) return@mapNotNull null
+
+			// Extract title from different possible locations
 			val title = linkElement.text().trim()
-			if (title.isEmpty()) return@mapNotNull null
+				.takeIf { it.isNotEmpty() }
+				?: linkElement.attr("title").trim().takeIf { it.isNotEmpty() }
+				?: div.selectFirst("h3, h2, h1")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+				?: return@mapNotNull null
 
 			val coverUrl = div.selectFirst("img")?.src()
 
@@ -402,5 +384,10 @@ internal abstract class MangaboxParser(
 			else -> 0
 		}
 	}
+
+	override fun getRequestHeaders(): Headers = Headers.Builder()
+		.add("User-Agent", config[userAgentKey])
+		.add("Referer", "https://$domain/")
+		.build()
 
 }

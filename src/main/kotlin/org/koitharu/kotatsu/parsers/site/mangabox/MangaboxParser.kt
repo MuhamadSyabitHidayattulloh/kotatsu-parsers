@@ -36,7 +36,6 @@ internal abstract class MangaboxParser(
         val httpClient = context.httpClient.newBuilder()
             .connectionSpecs(listOf(
                 ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS)
-                    .tlsVersions(TlsVersion.TLS_1_3)
                     .build()
             ))
             .build()

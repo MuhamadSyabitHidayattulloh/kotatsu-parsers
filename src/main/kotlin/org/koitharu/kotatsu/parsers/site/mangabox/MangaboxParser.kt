@@ -132,9 +132,9 @@ internal abstract class MangaboxParser(
 		if (titleCriteria != null) {
 			val searchTerm = titleCriteria.value.toString()
 			if (searchTerm.isNotBlank()) {
-				// Use WebView for search due to JavaScript requirements and Cloudflare protection
+				// Use direct search URL - WebView to be implemented later if needed for Cloudflare
 				val searchUrl = "https://${domain}/search/story/${searchTerm.replace(" ", "-").lowercase()}"
-				val doc = webClient.httpGet(searchUrl, useWebView = true).parseHtml()
+				val doc = webClient.httpGet(searchUrl).parseHtml()
 
 				return doc.select(".item, div.content-genres-item, div.list-story-item, div.search-story-item").mapNotNull { div ->
 					// For .item elements, the link is inside .slide-caption h3 a

@@ -387,5 +387,6 @@ internal abstract class MangaboxParser(
 
 	override fun getRequestHeaders(): Headers = super.getRequestHeaders().newBuilder()
 		.add("Referer", "https://$domain/")
-		.build()
+        .add("Host", "imgs-2.2xstorage.com")
+        .build()
 }

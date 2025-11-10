@@ -18,6 +18,7 @@ import org.koitharu.kotatsu.parsers.util.*
 import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.text.get
 
 internal abstract class MangaboxParser(
     context: MangaLoaderContext,
@@ -387,5 +388,8 @@ internal abstract class MangaboxParser(
 
     override fun getRequestHeaders(): Headers = super.getRequestHeaders().newBuilder()
         .add("Referer", "https://$domain/")
+        .add("Accept", "image/webp,image/apng,image/*,*/*;q=0.8")
+        .add("Accept-Encoding", "gzip, deflate, br")
+        .add("Accept-Language", "en-US,en;q=0.9")
         .build()
 }

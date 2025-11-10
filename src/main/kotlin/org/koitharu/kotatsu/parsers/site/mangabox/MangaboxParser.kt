@@ -3,10 +3,6 @@ package org.koitharu.kotatsu.parsers.site.mangabox
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import okhttp3.Headers
-import okhttp3.Protocol
-import okhttp3.ConnectionSpec
-import okhttp3.TlsVersion
-import okhttp3.CipherSuite
 import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.config.ConfigKey
@@ -19,8 +15,6 @@ import org.koitharu.kotatsu.parsers.model.search.SearchCapability
 import org.koitharu.kotatsu.parsers.model.search.SearchableField
 import org.koitharu.kotatsu.parsers.model.search.SearchableField.*
 import org.koitharu.kotatsu.parsers.util.*
-import org.koitharu.kotatsu.parsers.network.OkHttpWebClient
-import org.koitharu.kotatsu.parsers.network.WebClient
 import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.*
@@ -30,17 +24,6 @@ internal abstract class MangaboxParser(
     source: MangaParserSource,
     pageSize: Int = 24,
 ) : FlexiblePagedMangaParser(context, source, pageSize) {
-
-    // Custom HTTP client with TLS 1.3 and specific cipher to match CloudFlare expectations
-    private val customWebClient: WebClient by lazy {
-        val httpClient = context.httpClient.newBuilder()
-            .connectionSpecs(listOf(
-                ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS)
-                    .build()
-            ))
-            .build()
-        OkHttpWebClient(httpClient, source)
-    }
 
     override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
         super.onCreateConfig(keys)
@@ -152,7 +135,7 @@ internal abstract class MangaboxParser(
             if (searchTerm.isNotBlank()) {
                 // Use direct search URL - WebView to be implemented later if needed for Cloudflare
                 val searchUrl = "https://${domain}/search/story/${searchTerm.replace(" ", "-").lowercase()}"
-                val doc = customWebClient.httpGet(searchUrl).parseHtml()
+                val doc = webClient.httpGet(searchUrl).parseHtml()
 
                 // Search results might have different structure than homepage carousel
                 return parseSearchResults(doc)
@@ -166,14 +149,14 @@ internal abstract class MangaboxParser(
             }
 
             val genreUrl = "https://${domain}/genre/${genreKey}?page=$page"
-            val doc = customWebClient.httpGet(genreUrl).parseHtml()
+            val doc = webClient.httpGet(genreUrl).parseHtml()
 
             return parseSearchResults(doc)
         }
 
         // For regular listing (no search), use the new manga list URL
         val listingUrl = "https://${domain}${listUrl}?page=$page"
-        val doc = customWebClient.httpGet(listingUrl).parseHtml()
+        val doc = webClient.httpGet(listingUrl).parseHtml()
 
         return parseSearchResults(doc)
     }
@@ -233,7 +216,7 @@ internal abstract class MangaboxParser(
     protected open val selectTagMap = "div.panel-genres-list a:not(.genres-select)"
 
     protected open suspend fun fetchAvailableTags(): Set<MangaTag> {
-        val doc = customWebClient.httpGet("https://$domain$listUrl").parseHtml()
+        val doc = webClient.httpGet("https://$domain$listUrl").parseHtml()
         val tags = doc.select(selectTagMap).drop(1) // remove all tags
         return tags.mapToSet { a ->
             val key = a.attr("href").removeSuffix('/').substringAfterLast('/')
@@ -254,7 +237,7 @@ internal abstract class MangaboxParser(
 
     override suspend fun getDetails(manga: Manga): Manga = coroutineScope {
         val fullUrl = manga.url.toAbsoluteUrl(domain)
-        val doc = customWebClient.httpGet(fullUrl).parseHtml()
+        val doc = webClient.httpGet(fullUrl).parseHtml()
         val chaptersDeferred = async { getChapters(doc) }
         val desc = doc.selectFirst(selectDesc)?.html()
         val stateDiv = doc.select(selectState).text()
@@ -317,11 +300,11 @@ internal abstract class MangaboxParser(
 
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
         val fullUrl = chapter.url.toAbsoluteUrl(domain)
-        val doc = customWebClient.httpGet(fullUrl).parseHtml()
+        val doc = webClient.httpGet(fullUrl).parseHtml()
 
         if (doc.select(selectPage).isEmpty()) {
             val fullUrl2 = chapter.url.toAbsoluteUrl(domain).replace(domain, otherDomain)
-            val doc2 = customWebClient.httpGet(fullUrl2).parseHtml()
+            val doc2 = webClient.httpGet(fullUrl2).parseHtml()
 
             return doc2.select(selectPage).map { img ->
                 val url = img.requireSrc().toRelativeUrl(domain)

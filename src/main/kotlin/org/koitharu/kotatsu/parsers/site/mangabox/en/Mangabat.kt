@@ -6,6 +6,7 @@ import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.koitharu.kotatsu.parsers.site.mangabox.MangaboxParser
 
+
 @MangaSourceParser("HMANGABAT", "MangaBat", "en")
 internal class Mangabat(context: MangaLoaderContext) :
 	MangaboxParser(context, MangaParserSource.HMANGABAT) {

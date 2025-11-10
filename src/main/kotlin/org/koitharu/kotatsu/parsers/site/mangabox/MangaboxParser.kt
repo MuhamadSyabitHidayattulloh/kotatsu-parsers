@@ -81,7 +81,7 @@ internal abstract class MangaboxParser(
 		"completed",
 	)
 
-	protected open val listUrl = "/advanced_search"
+	protected open val listUrl = "/manga-list/latest-manga"
 	protected open val authorUrl = "/search/author"
 	protected open val searchUrl = "/search/story/"
 	protected open val datePattern = "MMM dd,yy"
@@ -121,49 +121,74 @@ internal abstract class MangaboxParser(
 	}
 
 	override suspend fun getListPage(query: MangaSearchQuery, page: Int): List<Manga> {
-		var authorSearchUrl: String? = null
-		val url = buildString {
-			val pageQueryParameter = "page=$page"
-			append("https://${domain}${listUrl}/?s=all")
+		// Handle simple search queries using the new search URL pattern
+		val titleCriteria = query.criteria.filterIsInstance<Match<*>>()
+			.find { it.field == TITLE_NAME }
 
-			query.criteria.forEach { criterion ->
-				when (criterion) {
-					is Include<*> -> {
-						if (criterion.field == AUTHOR) {
-							criterion.values.firstOrNull()?.toQueryParam()?.takeIf { it.isNotBlank() }
-								?.let { authorKey ->
-									authorSearchUrl = "https://${domain}${authorUrl}/${authorKey}/?$pageQueryParameter"
-								}
-						}
+		// Handle genre filtering using the new genre URL pattern
+		val genreIncludeCriteria = query.criteria.filterIsInstance<Include<*>>()
+			.find { it.field == TAG }
 
-						criterion.field.toParamName().takeIf { it.isNotBlank() }?.let { param ->
-							append("&$param=${criterion.values.joinToString("_") { it.toQueryParam() }}")
-						}
-					}
+		if (titleCriteria != null) {
+			val searchTerm = titleCriteria.value.toString()
+			if (searchTerm.isNotBlank()) {
+				// Use the direct search URL format: /search/story/searchterm
+				val searchUrl = "https://${domain}${searchUrl}${searchTerm.replace(" ", "-").lowercase()}"
+				val doc = webClient.httpGet(searchUrl).parseHtml()
 
-					is Exclude<*> -> {
-						append("&g_e=${criterion.values.joinToString("_") { it.toQueryParam() }}")
-					}
-
-					is Match<*> -> {
-						appendCriterion(criterion.field, criterion.value)
-					}
-
-					else -> {
-						// Not supported
-					}
+				return doc.select("div.content-genres-item, div.list-story-item, div.search-story-item").map { div ->
+					val href = div.selectFirstOrThrow("a").attrAsRelativeUrl("href")
+					Manga(
+						id = generateUid(href),
+						url = href,
+						publicUrl = href.toAbsoluteUrl(div.host ?: domain),
+						coverUrl = div.selectFirst("img")?.src(),
+						title = div.selectFirst("h3")?.text().orEmpty(),
+						altTitles = emptySet(),
+						rating = RATING_UNKNOWN,
+						tags = emptySet(),
+						authors = emptySet(),
+						state = null,
+						source = source,
+						contentRating = sourceContentRating,
+					)
 				}
 			}
+		} else if (genreIncludeCriteria != null && genreIncludeCriteria.values.isNotEmpty()) {
+			// Handle genre browsing - use only the first genre
+			val genre = genreIncludeCriteria.values.first()
+			val genreKey = when (genre) {
+				is MangaTag -> genre.key
+				else -> genre.toString().replace(" ", "-").lowercase()
+			}
 
-			append("&${pageQueryParameter}")
-			append("&orby=${(query.order ?: defaultSortOrder).toQueryParam()}")
+			val genreUrl = "https://${domain}/genre/${genreKey}?page=$page"
+			val doc = webClient.httpGet(genreUrl).parseHtml()
+
+			return doc.select("div.content-genres-item, div.list-story-item").map { div ->
+				val href = div.selectFirstOrThrow("a").attrAsRelativeUrl("href")
+				Manga(
+					id = generateUid(href),
+					url = href,
+					publicUrl = href.toAbsoluteUrl(div.host ?: domain),
+					coverUrl = div.selectFirst("img")?.src(),
+					title = div.selectFirst("h3")?.text().orEmpty(),
+					altTitles = emptySet(),
+					rating = RATING_UNKNOWN,
+					tags = emptySet(),
+					authors = emptySet(),
+					state = null,
+					source = source,
+					contentRating = sourceContentRating,
+				)
+			}
 		}
 
-		val doc = webClient.httpGet(authorSearchUrl ?: url).parseHtml()
+		// For regular listing (no search), use the new manga list URL
+		val listingUrl = "https://${domain}${listUrl}?page=$page"
+		val doc = webClient.httpGet(listingUrl).parseHtml()
 
-		return doc.select("div.content-genres-item, div.list-story-item").ifEmpty {
-			doc.select("div.search-story-item")
-		}.map { div ->
+		return doc.select("div.content-genres-item, div.list-story-item").map { div ->
 			val href = div.selectFirstOrThrow("a").attrAsRelativeUrl("href")
 			Manga(
 				id = generateUid(href),
@@ -185,7 +210,7 @@ internal abstract class MangaboxParser(
 	protected open val selectTagMap = "div.panel-genres-list a:not(.genres-select)"
 
 	protected open suspend fun fetchAvailableTags(): Set<MangaTag> {
-		val doc = webClient.httpGet("https://$domain/$listUrl").parseHtml()
+		val doc = webClient.httpGet("https://$domain$listUrl").parseHtml()
 		val tags = doc.select(selectTagMap).drop(1) // remove all tags
 		return tags.mapToSet { a ->
 			val key = a.attr("href").removeSuffix('/').substringAfterLast('/')

@@ -3,6 +3,9 @@ package org.koitharu.kotatsu.parsers.site.mangabox
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import okhttp3.Headers
+import okhttp3.Interceptor
+import okhttp3.OkHttpClient
+import okhttp3.Response
 import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.config.ConfigKey
@@ -14,6 +17,7 @@ import org.koitharu.kotatsu.parsers.model.search.QueryCriteria.*
 import org.koitharu.kotatsu.parsers.model.search.SearchCapability
 import org.koitharu.kotatsu.parsers.model.search.SearchableField
 import org.koitharu.kotatsu.parsers.model.search.SearchableField.*
+import org.koitharu.kotatsu.parsers.network.OkHttpWebClient
 import org.koitharu.kotatsu.parsers.util.*
 import java.text.DateFormat
 import java.text.SimpleDateFormat
@@ -24,6 +28,33 @@ internal abstract class MangaboxParser(
 	source: MangaParserSource,
 	pageSize: Int = 24,
 ) : FlexiblePagedMangaParser(context, source, pageSize) {
+
+	// Custom HTTP client with dynamic header interceptor
+	private val customHttpClient: OkHttpClient by lazy {
+		context.httpClient.newBuilder()
+			.addInterceptor(DynamicHeaderInterceptor())
+			.build()
+	}
+
+	// Override webClient to use custom HTTP client
+	override val webClient by lazy {
+		OkHttpWebClient(customHttpClient, source)
+	}
+
+	// Interceptor to add dynamic headers based on URL
+	private inner class DynamicHeaderInterceptor : Interceptor {
+		override fun intercept(chain: Interceptor.Chain): Response {
+			val original = chain.request()
+			val url = original.url.toString()
+
+			val newRequest = original.newBuilder()
+				.addHeader("Referer", "https://$domain/")
+				.addHeader("Host", original.url.host)
+				.build()
+
+			return chain.proceed(newRequest)
+		}
+	}
 
 	override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
 		super.onCreateConfig(keys)
@@ -385,8 +416,4 @@ internal abstract class MangaboxParser(
 		}
 	}
 
-	override fun getRequestHeaders(): Headers = super.getRequestHeaders().newBuilder()
-		.add("Referer", "https://$domain/")
-        .add("Host", "imgs-2.2xstorage.com")
-        .build()
 }

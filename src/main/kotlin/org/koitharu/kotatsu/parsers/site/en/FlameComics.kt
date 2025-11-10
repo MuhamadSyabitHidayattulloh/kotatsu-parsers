@@ -158,7 +158,9 @@ internal class FlameComics(context: MangaLoaderContext) :
 	private fun parseManga(jo: JSONObject): Manga {
 		// Try different possible field names for series ID, including string conversion
 		val seriesId = jo.getLongOrDefault("series_id", -1L).takeIf { it != -1L }
+			?: jo.getLongOrDefault("novel_id", -1L).takeIf { it != -1L }  // Handle novels
 			?: jo.getStringOrNull("series_id")?.toLongOrNull()
+			?: jo.getStringOrNull("novel_id")?.toLongOrNull()  // Handle novels as string
 			?: jo.getLongOrDefault("id", -1L).takeIf { it != -1L }
 			?: jo.getStringOrNull("id")?.toLongOrNull()
 			?: jo.getLongOrDefault("seriesId", -1L).takeIf { it != -1L }
@@ -168,6 +170,7 @@ internal class FlameComics(context: MangaLoaderContext) :
 			?: throw IllegalArgumentException(
 				"No valid series ID found. Available fields: ${jo.keys().asSequence().joinToString()}\n" +
 				"series_id value: ${jo.optString("series_id", "MISSING")}\n" +
+				"novel_id value: ${jo.optString("novel_id", "MISSING")}\n" +
 				"JSON sample: ${jo.toString().take(500)}"
 			)
 		val cover = jo.getStringOrNull("cover")

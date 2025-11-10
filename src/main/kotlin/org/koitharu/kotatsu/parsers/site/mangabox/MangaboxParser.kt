@@ -3,9 +3,7 @@ package org.koitharu.kotatsu.parsers.site.mangabox
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import okhttp3.Headers
-import okhttp3.Interceptor
-import okhttp3.OkHttpClient
-import okhttp3.Response
+import okhttp3.Protocol
 import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.config.ConfigKey
@@ -17,403 +15,388 @@ import org.koitharu.kotatsu.parsers.model.search.QueryCriteria.*
 import org.koitharu.kotatsu.parsers.model.search.SearchCapability
 import org.koitharu.kotatsu.parsers.model.search.SearchableField
 import org.koitharu.kotatsu.parsers.model.search.SearchableField.*
-import org.koitharu.kotatsu.parsers.network.OkHttpWebClient
 import org.koitharu.kotatsu.parsers.util.*
+import org.koitharu.kotatsu.parsers.network.OkHttpWebClient
+import org.koitharu.kotatsu.parsers.network.WebClient
 import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.*
 
 internal abstract class MangaboxParser(
-	context: MangaLoaderContext,
-	source: MangaParserSource,
-	pageSize: Int = 24,
+    context: MangaLoaderContext,
+    source: MangaParserSource,
+    pageSize: Int = 24,
 ) : FlexiblePagedMangaParser(context, source, pageSize) {
 
-	// Custom HTTP client with dynamic header interceptor
-	private val customHttpClient: OkHttpClient by lazy {
-		context.httpClient.newBuilder()
-			.addInterceptor(DynamicHeaderInterceptor())
-			.build()
-	}
+    // Force HTTP/1.1 to avoid CloudFlare detection
+    private val customWebClient: WebClient by lazy {
+        val httpClient = context.httpClient.newBuilder()
+            .protocols(listOf(Protocol.HTTP_1_1))
+            .build()
+        OkHttpWebClient(httpClient, source)
+    }
 
-	// Custom webClient to use our interceptor
-	private val customWebClient by lazy {
-		OkHttpWebClient(customHttpClient, source)
-	}
+    override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
+        super.onCreateConfig(keys)
+        keys.add(userAgentKey)
+    }
 
-	// Interceptor to add dynamic headers based on URL
-	private inner class DynamicHeaderInterceptor : Interceptor {
-		override fun intercept(chain: Interceptor.Chain): Response {
-			val original = chain.request()
-			val url = original.url.toString()
+    override val availableSortOrders: Set<SortOrder> = EnumSet.of(
+        SortOrder.UPDATED,
+        SortOrder.POPULARITY,
+        SortOrder.NEWEST,
+        SortOrder.ALPHABETICAL,
+    )
 
-			val newRequest = original.newBuilder()
-				.addHeader("Referer", "https://$domain/")
-				.addHeader("Host", original.url.host)
-				.build()
+    override val searchQueryCapabilities: MangaSearchQueryCapabilities
+        get() = MangaSearchQueryCapabilities(
+            SearchCapability(
+                field = TAG,
+                criteriaTypes = setOf(Include::class, Exclude::class),
+                isMultiple = true,
+            ),
+            SearchCapability(
+                field = TITLE_NAME,
+                criteriaTypes = setOf(Match::class),
+                isMultiple = false,
+            ),
+            SearchCapability(
+                field = STATE,
+                criteriaTypes = setOf(Include::class),
+                isMultiple = true,
+            ),
+            SearchCapability(
+                field = AUTHOR,
+                criteriaTypes = setOf(Include::class),
+                isMultiple = false,
+                isExclusive = true,
+            ),
+        )
 
-			return chain.proceed(newRequest)
-		}
-	}
+    override suspend fun getFilterOptions() = MangaListFilterOptions(
+        availableTags = fetchAvailableTags(),
+        availableStates = EnumSet.of(MangaState.ONGOING, MangaState.FINISHED),
+    )
 
-	override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
-		super.onCreateConfig(keys)
-		keys.add(userAgentKey)
-	}
+    init {
+        paginator.firstPage = 1
+        searchPaginator.firstPage = 1
+    }
 
-	override val availableSortOrders: Set<SortOrder> = EnumSet.of(
-		SortOrder.UPDATED,
-		SortOrder.POPULARITY,
-		SortOrder.NEWEST,
-		SortOrder.ALPHABETICAL,
-	)
+    @JvmField
+    protected val ongoing: Set<String> = setOf(
+        "ongoing",
+    )
 
-	override val searchQueryCapabilities: MangaSearchQueryCapabilities
-		get() = MangaSearchQueryCapabilities(
-			SearchCapability(
-				field = TAG,
-				criteriaTypes = setOf(Include::class, Exclude::class),
-				isMultiple = true,
-			),
-			SearchCapability(
-				field = TITLE_NAME,
-				criteriaTypes = setOf(Match::class),
-				isMultiple = false,
-			),
-			SearchCapability(
-				field = STATE,
-				criteriaTypes = setOf(Include::class),
-				isMultiple = true,
-			),
-			SearchCapability(
-				field = AUTHOR,
-				criteriaTypes = setOf(Include::class),
-				isMultiple = false,
-				isExclusive = true,
-			),
-		)
+    @JvmField
+    protected val finished: Set<String> = setOf(
+        "completed",
+    )
 
-	override suspend fun getFilterOptions() = MangaListFilterOptions(
-		availableTags = fetchAvailableTags(),
-		availableStates = EnumSet.of(MangaState.ONGOING, MangaState.FINISHED),
-	)
+    protected open val listUrl = "/manga-list/latest-manga"
+    protected open val authorUrl = "/search/author"
+    protected open val searchUrl = "/search/story/"
+    protected open val datePattern = "MMM dd,yy"
 
-	init {
-		paginator.firstPage = 1
-		searchPaginator.firstPage = 1
-	}
+    private fun SearchableField.toParamName(): String = when (this) {
+        TITLE_NAME, AUTHOR -> "keyw"
+        TAG -> "g_i"
+        STATE -> "sts"
+        else -> ""
+    }
 
-	@JvmField
-	protected val ongoing: Set<String> = setOf(
-		"ongoing",
-	)
+    private fun Any?.toQueryParam(): String = when (this) {
+        is String -> replace(" ", "_").urlEncoded()
+        is MangaTag -> key
+        is MangaState -> when (this) {
+            MangaState.ONGOING -> "ongoing"
+            MangaState.FINISHED -> "completed"
+            else -> ""
+        }
 
-	@JvmField
-	protected val finished: Set<String> = setOf(
-		"completed",
-	)
+        is SortOrder -> when (this) {
+            SortOrder.ALPHABETICAL -> "az"
+            SortOrder.NEWEST -> "newest"
+            SortOrder.POPULARITY -> "topview"
+            else -> ""
+        }
 
-	protected open val listUrl = "/manga-list/latest-manga"
-	protected open val authorUrl = "/search/author"
-	protected open val searchUrl = "/search/story/"
-	protected open val datePattern = "MMM dd,yy"
+        else -> this.toString().replace(" ", "_").urlEncoded()
+    }
 
-	private fun SearchableField.toParamName(): String = when (this) {
-		TITLE_NAME, AUTHOR -> "keyw"
-		TAG -> "g_i"
-		STATE -> "sts"
-		else -> ""
-	}
+    private fun StringBuilder.appendCriterion(field: SearchableField, value: Any?, paramName: String? = null) {
+        val param = paramName ?: field.toParamName()
+        if (param.isNotBlank()) {
+            append("&$param=")
+            append(value.toQueryParam())
+        }
+    }
 
-	private fun Any?.toQueryParam(): String = when (this) {
-		is String -> replace(" ", "_").urlEncoded()
-		is MangaTag -> key
-		is MangaState -> when (this) {
-			MangaState.ONGOING -> "ongoing"
-			MangaState.FINISHED -> "completed"
-			else -> ""
-		}
+    override suspend fun getListPage(query: MangaSearchQuery, page: Int): List<Manga> {
+        // Handle simple search queries using the new search URL pattern
+        val titleCriteria = query.criteria.filterIsInstance<Match<*>>()
+            .find { it.field == TITLE_NAME }
 
-		is SortOrder -> when (this) {
-			SortOrder.ALPHABETICAL -> "az"
-			SortOrder.NEWEST -> "newest"
-			SortOrder.POPULARITY -> "topview"
-			else -> ""
-		}
+        // Handle genre filtering using the new genre URL pattern
+        val genreIncludeCriteria = query.criteria.filterIsInstance<Include<*>>()
+            .find { it.field == TAG }
 
-		else -> this.toString().replace(" ", "_").urlEncoded()
-	}
+        if (titleCriteria != null) {
+            val searchTerm = titleCriteria.value.toString()
+            if (searchTerm.isNotBlank()) {
+                // Use direct search URL - WebView to be implemented later if needed for Cloudflare
+                val searchUrl = "https://${domain}/search/story/${searchTerm.replace(" ", "-").lowercase()}"
+                val doc = customWebClient.httpGet(searchUrl).parseHtml()
 
-	private fun StringBuilder.appendCriterion(field: SearchableField, value: Any?, paramName: String? = null) {
-		val param = paramName ?: field.toParamName()
-		if (param.isNotBlank()) {
-			append("&$param=")
-			append(value.toQueryParam())
-		}
-	}
+                // Search results might have different structure than homepage carousel
+                return parseSearchResults(doc)
+            }
+        } else if (genreIncludeCriteria != null && genreIncludeCriteria.values.isNotEmpty()) {
+            // Handle genre browsing - use only the first genre
+            val genre = genreIncludeCriteria.values.first()
+            val genreKey = when (genre) {
+                is MangaTag -> genre.key
+                else -> genre.toString().replace(" ", "-").lowercase()
+            }
 
-	override suspend fun getListPage(query: MangaSearchQuery, page: Int): List<Manga> {
-		// Handle simple search queries using the new search URL pattern
-		val titleCriteria = query.criteria.filterIsInstance<Match<*>>()
-			.find { it.field == TITLE_NAME }
+            val genreUrl = "https://${domain}/genre/${genreKey}?page=$page"
+            val doc = customWebClient.httpGet(genreUrl).parseHtml()
 
-		// Handle genre filtering using the new genre URL pattern
-		val genreIncludeCriteria = query.criteria.filterIsInstance<Include<*>>()
-			.find { it.field == TAG }
+            return parseSearchResults(doc)
+        }
 
-		if (titleCriteria != null) {
-			val searchTerm = titleCriteria.value.toString()
-			if (searchTerm.isNotBlank()) {
-				// Use direct search URL - WebView to be implemented later if needed for Cloudflare
-				val searchUrl = "https://${domain}/search/story/${searchTerm.replace(" ", "-").lowercase()}"
-				val doc = customWebClient.httpGet(searchUrl).parseHtml()
+        // For regular listing (no search), use the new manga list URL
+        val listingUrl = "https://${domain}${listUrl}?page=$page"
+        val doc = customWebClient.httpGet(listingUrl).parseHtml()
 
-				// Search results might have different structure than homepage carousel
-				return parseSearchResults(doc)
-			}
-		} else if (genreIncludeCriteria != null && genreIncludeCriteria.values.isNotEmpty()) {
-			// Handle genre browsing - use only the first genre
-			val genre = genreIncludeCriteria.values.first()
-			val genreKey = when (genre) {
-				is MangaTag -> genre.key
-				else -> genre.toString().replace(" ", "-").lowercase()
-			}
+        return parseSearchResults(doc)
+    }
 
-			val genreUrl = "https://${domain}/genre/${genreKey}?page=$page"
-			val doc = customWebClient.httpGet(genreUrl).parseHtml()
+    protected open fun parseSearchResults(doc: Document): List<Manga> {
+        // Search results use .story_item, listing uses .item (carousel)
+        val elements = doc.select(".story_item")  // Search results structure
+            .ifEmpty { doc.select(".item") }  // Homepage carousel
+            .ifEmpty { doc.select(".manga-item") }  // Grid layout
+            .ifEmpty { doc.select("div.content-genres-item") }  // Alternative layout
+            .ifEmpty { doc.select("div.list-story-item") }  // List layout
+            .ifEmpty { doc.select("div.search-story-item") }  // Search specific
+            .ifEmpty { doc.select("div[class*='story']") }  // Generic story containers
+            .ifEmpty { doc.select("a[href*='/manga/']").map { it.parent() ?: it } }  // Links to manga
 
-			return parseSearchResults(doc)
-		}
+        return elements.mapNotNull { div ->
+            // Handle search result structure (.story_item)
+            val linkElement = if (div.hasClass("story_item")) {
+                div.selectFirst(".story_name a") ?: div.selectFirst("a[href*='/manga/']")
+            } else {
+                // Handle carousel structure (.item)
+                div.selectFirst(".slide-caption h3 a")  // Carousel structure
+                    ?: div.selectFirst("h3 a")  // Direct h3 link
+                    ?: div.selectFirst("a[href*='/manga/']")  // Any manga link
+                    ?: if (div.tagName() == "a") div else null  // Element itself is a link
+            }
 
-		// For regular listing (no search), use the new manga list URL
-		val listingUrl = "https://${domain}${listUrl}?page=$page"
-		val doc = customWebClient.httpGet(listingUrl).parseHtml()
+            val href = linkElement?.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
+            if (!href.contains("/manga/")) return@mapNotNull null
 
-		return parseSearchResults(doc)
-	}
+            // Extract title from different possible locations
+            val title = linkElement.text().trim()
+                .takeIf { it.isNotEmpty() }
+                ?: linkElement.attr("title").trim().takeIf { it.isNotEmpty() }
+                ?: div.selectFirst("h3, h2, h1")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: return@mapNotNull null
 
-	protected open fun parseSearchResults(doc: Document): List<Manga> {
-		// Search results use .story_item, listing uses .item (carousel)
-		val elements = doc.select(".story_item")  // Search results structure
-			.ifEmpty { doc.select(".item") }  // Homepage carousel
-			.ifEmpty { doc.select(".manga-item") }  // Grid layout
-			.ifEmpty { doc.select("div.content-genres-item") }  // Alternative layout
-			.ifEmpty { doc.select("div.list-story-item") }  // List layout
-			.ifEmpty { doc.select("div.search-story-item") }  // Search specific
-			.ifEmpty { doc.select("div[class*='story']") }  // Generic story containers
-			.ifEmpty { doc.select("a[href*='/manga/']").map { it.parent() ?: it } }  // Links to manga
+            val coverUrl = div.selectFirst("img")?.src()
 
-		return elements.mapNotNull { div ->
-			// Handle search result structure (.story_item)
-			val linkElement = if (div.hasClass("story_item")) {
-				div.selectFirst(".story_name a") ?: div.selectFirst("a[href*='/manga/']")
-			} else {
-				// Handle carousel structure (.item)
-				div.selectFirst(".slide-caption h3 a")  // Carousel structure
-					?: div.selectFirst("h3 a")  // Direct h3 link
-					?: div.selectFirst("a[href*='/manga/']")  // Any manga link
-					?: if (div.tagName() == "a") div else null  // Element itself is a link
-			}
+            Manga(
+                id = generateUid(href),
+                url = href,
+                publicUrl = href.toAbsoluteUrl(div.host ?: domain),
+                coverUrl = coverUrl,
+                title = title,
+                altTitles = emptySet(),
+                rating = RATING_UNKNOWN,
+                tags = emptySet(),
+                authors = emptySet(),
+                state = null,
+                source = source,
+                contentRating = sourceContentRating,
+            )
+        }
+    }
 
-			val href = linkElement?.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
-			if (!href.contains("/manga/")) return@mapNotNull null
+    protected open val selectTagMap = "div.panel-genres-list a:not(.genres-select)"
 
-			// Extract title from different possible locations
-			val title = linkElement.text().trim()
-				.takeIf { it.isNotEmpty() }
-				?: linkElement.attr("title").trim().takeIf { it.isNotEmpty() }
-				?: div.selectFirst("h3, h2, h1")?.text()?.trim()?.takeIf { it.isNotEmpty() }
-				?: return@mapNotNull null
+    protected open suspend fun fetchAvailableTags(): Set<MangaTag> {
+        val doc = customWebClient.httpGet("https://$domain$listUrl").parseHtml()
+        val tags = doc.select(selectTagMap).drop(1) // remove all tags
+        return tags.mapToSet { a ->
+            val key = a.attr("href").removeSuffix('/').substringAfterLast('/')
+            val name = a.attr("title").replace(" Manga", "")
+            MangaTag(
+                key = key,
+                title = name,
+                source = source,
+            )
+        }
+    }
 
-			val coverUrl = div.selectFirst("img")?.src()
+    protected open val selectDesc = "div#noidungm, div#panel-story-info-description"
+    protected open val selectState = "li:contains(status), td:containsOwn(status) + td"
+    protected open val selectAlt = ".story-alternative, tr:has(.info-alternative) h2"
+    protected open val selectAut = "li:contains(author) a, td:contains(author) + td a"
+    protected open val selectTag = "div.manga-info-top li:contains(genres) a , td:containsOwn(genres) + td a"
 
-			Manga(
-				id = generateUid(href),
-				url = href,
-				publicUrl = href.toAbsoluteUrl(div.host ?: domain),
-				coverUrl = coverUrl,
-				title = title,
-				altTitles = emptySet(),
-				rating = RATING_UNKNOWN,
-				tags = emptySet(),
-				authors = emptySet(),
-				state = null,
-				source = source,
-				contentRating = sourceContentRating,
-			)
-		}
-	}
+    override suspend fun getDetails(manga: Manga): Manga = coroutineScope {
+        val fullUrl = manga.url.toAbsoluteUrl(domain)
+        val doc = customWebClient.httpGet(fullUrl).parseHtml()
+        val chaptersDeferred = async { getChapters(doc) }
+        val desc = doc.selectFirst(selectDesc)?.html()
+        val stateDiv = doc.select(selectState).text()
+        val state = stateDiv.let {
+            when (it.lowercase()) {
+                in ongoing -> MangaState.ONGOING
+                in finished -> MangaState.FINISHED
+                else -> null
+            }
+        }
+        val alt = doc.body().select(selectAlt).text().replace("Alternative : ", "").nullIfEmpty()
+        val authors = doc.body().select(selectAut).mapToSet { it.text() }
 
-	protected open val selectTagMap = "div.panel-genres-list a:not(.genres-select)"
+        manga.copy(
+            tags = doc.body().select(selectTag).mapToSet { a ->
+                MangaTag(
+                    key = a.attr("href").substringAfterLast("category=").substringBefore("&"),
+                    title = a.text().toTitleCase(),
+                    source = source,
+                )
+            },
+            description = desc,
+            altTitles = setOfNotNull(alt),
+            authors = authors,
+            state = state,
+            chapters = chaptersDeferred.await(),
+        )
+    }
 
-	protected open suspend fun fetchAvailableTags(): Set<MangaTag> {
-		val doc = customWebClient.httpGet("https://$domain$listUrl").parseHtml()
-		val tags = doc.select(selectTagMap).drop(1) // remove all tags
-		return tags.mapToSet { a ->
-			val key = a.attr("href").removeSuffix('/').substringAfterLast('/')
-			val name = a.attr("title").replace(" Manga", "")
-			MangaTag(
-				key = key,
-				title = name,
-				source = source,
-			)
-		}
-	}
+    protected open val selectDate = "span"
+    protected open val selectChapter = "div.chapter-list div.row, ul.row-content-chapter li"
 
-	protected open val selectDesc = "div#noidungm, div#panel-story-info-description"
-	protected open val selectState = "li:contains(status), td:containsOwn(status) + td"
-	protected open val selectAlt = ".story-alternative, tr:has(.info-alternative) h2"
-	protected open val selectAut = "li:contains(author) a, td:contains(author) + td a"
-	protected open val selectTag = "div.manga-info-top li:contains(genres) a , td:containsOwn(genres) + td a"
+    protected open suspend fun getChapters(doc: Document): List<MangaChapter> {
+        val dateFormat = SimpleDateFormat(datePattern, sourceLocale)
+        return doc.body().select(selectChapter).mapChapters(reversed = true) { i, li ->
+            val a = li.selectFirstOrThrow("a")
+            val href = a.attrAsRelativeUrl("href")
+            val dateText = li.select(selectDate).last()?.text()
 
-	override suspend fun getDetails(manga: Manga): Manga = coroutineScope {
-		val fullUrl = manga.url.toAbsoluteUrl(domain)
-		val doc = customWebClient.httpGet(fullUrl).parseHtml()
-		val chaptersDeferred = async { getChapters(doc) }
-		val desc = doc.selectFirst(selectDesc)?.html()
-		val stateDiv = doc.select(selectState).text()
-		val state = stateDiv.let {
-			when (it.lowercase()) {
-				in ongoing -> MangaState.ONGOING
-				in finished -> MangaState.FINISHED
-				else -> null
-			}
-		}
-		val alt = doc.body().select(selectAlt).text().replace("Alternative : ", "").nullIfEmpty()
-		val authors = doc.body().select(selectAut).mapToSet { it.text() }
+            MangaChapter(
+                id = generateUid(href),
+                title = a.text(),
+                number = i + 1f,
+                volume = 0,
+                url = href,
+                uploadDate = parseChapterDate(
+                    dateFormat,
+                    dateText,
+                ),
+                source = source,
+                scanlator = null,
+                branch = null,
+            )
+        }
+    }
 
-		manga.copy(
-			tags = doc.body().select(selectTag).mapToSet { a ->
-				MangaTag(
-					key = a.attr("href").substringAfterLast("category=").substringBefore("&"),
-					title = a.text().toTitleCase(),
-					source = source,
-				)
-			},
-			description = desc,
-			altTitles = setOfNotNull(alt),
-			authors = authors,
-			state = state,
-			chapters = chaptersDeferred.await(),
-		)
-	}
+    protected open val selectPage = "div#vungdoc img, div.container-chapter-reader img"
 
-	protected open val selectDate = "span"
-	protected open val selectChapter = "div.chapter-list div.row, ul.row-content-chapter li"
+    protected open val otherDomain = ""
 
-	protected open suspend fun getChapters(doc: Document): List<MangaChapter> {
-		val dateFormat = SimpleDateFormat(datePattern, sourceLocale)
-		return doc.body().select(selectChapter).mapChapters(reversed = true) { i, li ->
-			val a = li.selectFirstOrThrow("a")
-			val href = a.attrAsRelativeUrl("href")
-			val dateText = li.select(selectDate).last()?.text()
+    override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
+        val fullUrl = chapter.url.toAbsoluteUrl(domain)
+        val doc = customWebClient.httpGet(fullUrl).parseHtml()
 
-			MangaChapter(
-				id = generateUid(href),
-				title = a.text(),
-				number = i + 1f,
-				volume = 0,
-				url = href,
-				uploadDate = parseChapterDate(
-					dateFormat,
-					dateText,
-				),
-				source = source,
-				scanlator = null,
-				branch = null,
-			)
-		}
-	}
+        if (doc.select(selectPage).isEmpty()) {
+            val fullUrl2 = chapter.url.toAbsoluteUrl(domain).replace(domain, otherDomain)
+            val doc2 = customWebClient.httpGet(fullUrl2).parseHtml()
 
-	protected open val selectPage = "div#vungdoc img, div.container-chapter-reader img"
+            return doc2.select(selectPage).map { img ->
+                val url = img.requireSrc().toRelativeUrl(domain)
 
-	protected open val otherDomain = ""
+                MangaPage(
+                    id = generateUid(url),
+                    url = url,
+                    preview = null,
+                    source = source,
+                )
+            }
+        } else {
+            return doc.select(selectPage).map { img ->
+                val url = img.requireSrc().toRelativeUrl(domain)
 
-	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-		val fullUrl = chapter.url.toAbsoluteUrl(domain)
-		val doc = customWebClient.httpGet(fullUrl).parseHtml()
+                MangaPage(
+                    id = generateUid(url),
+                    url = url,
+                    preview = null,
+                    source = source,
+                )
+            }
+        }
 
-		if (doc.select(selectPage).isEmpty()) {
-			val fullUrl2 = chapter.url.toAbsoluteUrl(domain).replace(domain, otherDomain)
-			val doc2 = customWebClient.httpGet(fullUrl2).parseHtml()
+    }
 
-			return doc2.select(selectPage).map { img ->
-				val url = img.requireSrc().toRelativeUrl(domain)
+    protected fun parseChapterDate(dateFormat: DateFormat, date: String?): Long {
+        val d = date?.lowercase() ?: return 0
+        return when {
+            WordSet(" ago", " h", " d").endsWith(d) -> {
+                parseRelativeDate(d)
+            }
 
-				MangaPage(
-					id = generateUid(url),
-					url = url,
-					preview = null,
-					source = source,
-				)
-			}
-		} else {
-			return doc.select(selectPage).map { img ->
-				val url = img.requireSrc().toRelativeUrl(domain)
+            WordSet("today").startsWith(d) -> {
+                Calendar.getInstance().apply {
+                    set(Calendar.HOUR_OF_DAY, 0)
+                    set(Calendar.MINUTE, 0)
+                    set(Calendar.SECOND, 0)
+                    set(Calendar.MILLISECOND, 0)
+                }.timeInMillis
+            }
 
-				MangaPage(
-					id = generateUid(url),
-					url = url,
-					preview = null,
-					source = source,
-				)
-			}
-		}
+            date.contains(Regex("""\d(st|nd|rd|th)""")) -> date.split(" ").map {
+                if (it.contains(Regex("""\d\D\D"""))) {
+                    it.replace(Regex("""\D"""), "")
+                } else {
+                    it
+                }
+            }.let { dateFormat.parseSafe(it.joinToString(" ")) }
 
-	}
+            else -> dateFormat.parseSafe(date)
+        }
+    }
 
-	protected fun parseChapterDate(dateFormat: DateFormat, date: String?): Long {
-		val d = date?.lowercase() ?: return 0
-		return when {
-			WordSet(" ago", " h", " d").endsWith(d) -> {
-				parseRelativeDate(d)
-			}
+    private fun parseRelativeDate(date: String): Long {
+        val number = Regex("""(\d+)""").find(date)?.value?.toIntOrNull() ?: return 0
+        val cal = Calendar.getInstance()
+        return when {
+            WordSet("second")
+                .anyWordIn(date) -> cal.apply { add(Calendar.SECOND, -number) }.timeInMillis
 
-			WordSet("today").startsWith(d) -> {
-				Calendar.getInstance().apply {
-					set(Calendar.HOUR_OF_DAY, 0)
-					set(Calendar.MINUTE, 0)
-					set(Calendar.SECOND, 0)
-					set(Calendar.MILLISECOND, 0)
-				}.timeInMillis
-			}
+            WordSet("min", "minute", "minutes")
+                .anyWordIn(date) -> cal.apply { add(Calendar.MINUTE, -number) }.timeInMillis
 
-			date.contains(Regex("""\d(st|nd|rd|th)""")) -> date.split(" ").map {
-				if (it.contains(Regex("""\d\D\D"""))) {
-					it.replace(Regex("""\D"""), "")
-				} else {
-					it
-				}
-			}.let { dateFormat.parseSafe(it.joinToString(" ")) }
+            WordSet("hour", "hours", "h")
+                .anyWordIn(date) -> cal.apply { add(Calendar.HOUR, -number) }.timeInMillis
 
-			else -> dateFormat.parseSafe(date)
-		}
-	}
+            WordSet("day", "days")
+                .anyWordIn(date) -> cal.apply { add(Calendar.DAY_OF_MONTH, -number) }.timeInMillis
 
-	private fun parseRelativeDate(date: String): Long {
-		val number = Regex("""(\d+)""").find(date)?.value?.toIntOrNull() ?: return 0
-		val cal = Calendar.getInstance()
-		return when {
-			WordSet("second")
-				.anyWordIn(date) -> cal.apply { add(Calendar.SECOND, -number) }.timeInMillis
+            WordSet("month", "months")
+                .anyWordIn(date) -> cal.apply { add(Calendar.MONTH, -number) }.timeInMillis
 
-			WordSet("min", "minute", "minutes")
-				.anyWordIn(date) -> cal.apply { add(Calendar.MINUTE, -number) }.timeInMillis
+            WordSet("year")
+                .anyWordIn(date) -> cal.apply { add(Calendar.YEAR, -number) }.timeInMillis
 
-			WordSet("hour", "hours", "h")
-				.anyWordIn(date) -> cal.apply { add(Calendar.HOUR, -number) }.timeInMillis
+            else -> 0
+        }
+    }
 
-			WordSet("day", "days")
-				.anyWordIn(date) -> cal.apply { add(Calendar.DAY_OF_MONTH, -number) }.timeInMillis
-
-			WordSet("month", "months")
-				.anyWordIn(date) -> cal.apply { add(Calendar.MONTH, -number) }.timeInMillis
-
-			WordSet("year")
-				.anyWordIn(date) -> cal.apply { add(Calendar.YEAR, -number) }.timeInMillis
-
-			else -> 0
-		}
-	}
-
+    override fun getRequestHeaders(): Headers = super.getRequestHeaders().newBuilder()
+        .add("Referer", "https://$domain/")
+        .build()
 }

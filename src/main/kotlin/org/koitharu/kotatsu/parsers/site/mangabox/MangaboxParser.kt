@@ -36,8 +36,8 @@ internal abstract class MangaboxParser(
 			.build()
 	}
 
-	// Override webClient to use custom HTTP client
-	override val webClient by lazy {
+	// Custom webClient to use our interceptor
+	private val customWebClient by lazy {
 		OkHttpWebClient(customHttpClient, source)
 	}
 
@@ -166,7 +166,7 @@ internal abstract class MangaboxParser(
 			if (searchTerm.isNotBlank()) {
 				// Use direct search URL - WebView to be implemented later if needed for Cloudflare
 				val searchUrl = "https://${domain}/search/story/${searchTerm.replace(" ", "-").lowercase()}"
-				val doc = webClient.httpGet(searchUrl).parseHtml()
+				val doc = customWebClient.httpGet(searchUrl).parseHtml()
 
 				// Search results might have different structure than homepage carousel
 				return parseSearchResults(doc)
@@ -180,14 +180,14 @@ internal abstract class MangaboxParser(
 			}
 
 			val genreUrl = "https://${domain}/genre/${genreKey}?page=$page"
-			val doc = webClient.httpGet(genreUrl).parseHtml()
+			val doc = customWebClient.httpGet(genreUrl).parseHtml()
 
 			return parseSearchResults(doc)
 		}
 
 		// For regular listing (no search), use the new manga list URL
 		val listingUrl = "https://${domain}${listUrl}?page=$page"
-		val doc = webClient.httpGet(listingUrl).parseHtml()
+		val doc = customWebClient.httpGet(listingUrl).parseHtml()
 
 		return parseSearchResults(doc)
 	}
@@ -247,7 +247,7 @@ internal abstract class MangaboxParser(
 	protected open val selectTagMap = "div.panel-genres-list a:not(.genres-select)"
 
 	protected open suspend fun fetchAvailableTags(): Set<MangaTag> {
-		val doc = webClient.httpGet("https://$domain$listUrl").parseHtml()
+		val doc = customWebClient.httpGet("https://$domain$listUrl").parseHtml()
 		val tags = doc.select(selectTagMap).drop(1) // remove all tags
 		return tags.mapToSet { a ->
 			val key = a.attr("href").removeSuffix('/').substringAfterLast('/')
@@ -268,7 +268,7 @@ internal abstract class MangaboxParser(
 
 	override suspend fun getDetails(manga: Manga): Manga = coroutineScope {
 		val fullUrl = manga.url.toAbsoluteUrl(domain)
-		val doc = webClient.httpGet(fullUrl).parseHtml()
+		val doc = customWebClient.httpGet(fullUrl).parseHtml()
 		val chaptersDeferred = async { getChapters(doc) }
 		val desc = doc.selectFirst(selectDesc)?.html()
 		val stateDiv = doc.select(selectState).text()
@@ -331,11 +331,11 @@ internal abstract class MangaboxParser(
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
 		val fullUrl = chapter.url.toAbsoluteUrl(domain)
-		val doc = webClient.httpGet(fullUrl).parseHtml()
+		val doc = customWebClient.httpGet(fullUrl).parseHtml()
 
 		if (doc.select(selectPage).isEmpty()) {
 			val fullUrl2 = chapter.url.toAbsoluteUrl(domain).replace(domain, otherDomain)
-			val doc2 = webClient.httpGet(fullUrl2).parseHtml()
+			val doc2 = customWebClient.httpGet(fullUrl2).parseHtml()
 
 			return doc2.select(selectPage).map { img ->
 				val url = img.requireSrc().toRelativeUrl(domain)

@@ -223,19 +223,19 @@ internal class Comix(context: MangaLoaderContext) :
         // Get the chapter page HTML to extract images from the script
         val response = webClient.httpGet(chapterUrl).parseHtml()
 
-        // Look for the images array in the JavaScript
+        // Look for the images array in the JavaScript (with escaped quotes)
         val scripts = response.select("script")
         var images: JSONArray? = null
 
         for (script in scripts) {
             val scriptContent = script.html()
 
-            // Look for the images array directly in the script content
-            if (scriptContent.contains("\"images\":[")) {
+            // Look for the images array with escaped quotes in JSON
+            if (scriptContent.contains("\\\"images\\\":[")) {
                 try {
-                    // Find the start of the images array
-                    val imagesStart = scriptContent.indexOf("\"images\":[")
-                    var arrayStart = imagesStart + 9 // Skip to after "images":
+                    // Find the start of the images array (with escaped quotes)
+                    val imagesStart = scriptContent.indexOf("\\\"images\\\":[")
+                    var arrayStart = imagesStart + 11 // Skip to after "images":
 
                     // Find the matching closing bracket for the array
                     var bracketCount = 0
@@ -266,7 +266,8 @@ internal class Comix(context: MangaLoaderContext) :
                     }
 
                     val imagesJsonString = scriptContent.substring(arrayStart, arrayEnd)
-                    images = JSONArray(imagesJsonString)
+                    // Parse the JSON array, handling escaped quotes
+                    images = JSONArray(imagesJsonString.replace("\\\"", "\""))
                     break
                 } catch (e: Exception) {
                     // Continue to next script if parsing fails

@@ -131,8 +131,8 @@ internal class MangaLivre(context: MangaLoaderContext) :
 
 		if (requests.isNotEmpty()) {
 			val response = requests.first()
-			println("DEBUG: Intercepted response (length=${response.body.size})")
-			val html = response.body.decodeToString()
+			println("DEBUG: Intercepted response (length=${response.body?.length})")
+			val html = response.body.toString()
 			println("DEBUG: First 200 chars: ${html.take(200)}")
 			val doc = Jsoup.parse(html, url)
 			return parseMangaList(doc)

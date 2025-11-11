@@ -235,15 +235,16 @@ internal class Comix(context: MangaLoaderContext) :
                 try {
                     // Find the start of the images array (with escaped quotes)
                     val imagesStart = scriptContent.indexOf("\\\"images\\\":[")
-                    var arrayStart = imagesStart + 11 // Skip to after "images":
+                    val colonPos = scriptContent.indexOf(":", imagesStart)
+                    val arrayStart = scriptContent.indexOf("[", colonPos)
 
                     // Find the matching closing bracket for the array
-                    var bracketCount = 0
-                    var arrayEnd = arrayStart
+                    var bracketCount = 1 // Start with 1 since we're at the opening bracket
+                    var arrayEnd = arrayStart + 1 // Start after the opening bracket
                     var inString = false
                     var escapeNext = false
 
-                    for (i in arrayStart until scriptContent.length) {
+                    for (i in (arrayStart + 1) until scriptContent.length) {
                         val char = scriptContent[i]
 
                         if (escapeNext) {

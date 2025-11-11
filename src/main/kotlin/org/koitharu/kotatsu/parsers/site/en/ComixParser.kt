@@ -14,7 +14,7 @@ import org.koitharu.kotatsu.parsers.model.*
 import org.koitharu.kotatsu.parsers.util.*
 import java.util.*
 
-@MangaSourceParser("COMIX", "Comix", "en", ContentType.COMICS)
+@MangaSourceParser("COMIX", "Comix", "en", ContentType.MANGA)
 internal class Comix(context: MangaLoaderContext) :
     PagedMangaParser(context, MangaParserSource.COMIX, 28) {
 
@@ -230,58 +230,46 @@ internal class Comix(context: MangaLoaderContext) :
         for (script in scripts) {
             val scriptContent = script.html()
 
-            // Look for the chapter data in the script
-            if (scriptContent.contains("\"chapter\":") && scriptContent.contains("\"images\":[")) {
+            // Look for the images array directly in the script content
+            if (scriptContent.contains("\"images\":[")) {
                 try {
-                    // Try to find and parse the chapter JSON object that contains the images array
-                    val chapterStart = scriptContent.indexOf("\"chapter\":")
-                    if (chapterStart != -1) {
-                        // Find the opening brace for the chapter object
-                        val jsonStart = scriptContent.indexOf("{", chapterStart - 20)
-                        if (jsonStart != -1) {
-                            // Find the closing brace - count braces to find the matching one
-                            var braceCount = 0
-                            var jsonEnd = jsonStart
-                            for (i in jsonStart until scriptContent.length) {
-                                when (scriptContent[i]) {
-                                    '{' -> braceCount++
-                                    '}' -> {
-                                        braceCount--
-                                        if (braceCount == 0) {
-                                            jsonEnd = i + 1
-                                            break
-                                        }
-                                    }
-                                }
-                            }
+                    // Find the start of the images array
+                    val imagesStart = scriptContent.indexOf("\"images\":[")
+                    var arrayStart = imagesStart + 9 // Skip to after "images":
 
-                            val jsonText = scriptContent.substring(jsonStart, jsonEnd)
-                            val chapterJson = JSONObject(jsonText)
+                    // Find the matching closing bracket for the array
+                    var bracketCount = 0
+                    var arrayEnd = arrayStart
+                    var inString = false
+                    var escapeNext = false
 
-                            if (chapterJson.has("chapter")) {
-                                val chapterData = chapterJson.getJSONObject("chapter")
-                                if (chapterData.has("images")) {
-                                    images = chapterData.getJSONArray("images")
+                    for (i in arrayStart until scriptContent.length) {
+                        val char = scriptContent[i]
+
+                        if (escapeNext) {
+                            escapeNext = false
+                            continue
+                        }
+
+                        when (char) {
+                            '\\' -> escapeNext = true
+                            '"' -> inString = !inString
+                            '[' -> if (!inString) bracketCount++
+                            ']' -> if (!inString) {
+                                bracketCount--
+                                if (bracketCount == 0) {
+                                    arrayEnd = i + 1
                                     break
                                 }
                             }
                         }
                     }
-                } catch (e: Exception) {
-                    // If JSON parsing fails, try the old method
-                    continue
-                }
-            }
 
-            // Fallback to the old method
-            if (scriptContent.contains("\"images\":[")) {
-                try {
-                    val start = scriptContent.indexOf("\"images\":[")
-                    val end = scriptContent.indexOf("]", start) + 1
-                    val imagesJson = scriptContent.substring(start + 9, end)
-                    images = JSONArray(imagesJson)
+                    val imagesJsonString = scriptContent.substring(arrayStart, arrayEnd)
+                    images = JSONArray(imagesJsonString)
                     break
                 } catch (e: Exception) {
+                    // Continue to next script if parsing fails
                     continue
                 }
             }
@@ -368,10 +356,4 @@ internal class Comix(context: MangaLoaderContext) :
             )
         }.reversed() // Reverse to have ascending order
     }
-
-    override fun getRequestHeaders(): Headers = super.getRequestHeaders().newBuilder()
-        .add("Referer", "https://comix.to/")
-        .add("Accept", "application/json, text/plain, */*")
-        .add("Accept-Language", "en-US,en;q=0.9")
-        .build()
 }

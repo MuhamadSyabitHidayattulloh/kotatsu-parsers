@@ -229,13 +229,61 @@ internal class Comix(context: MangaLoaderContext) :
 
         for (script in scripts) {
             val scriptContent = script.html()
+
+            // Look for the chapter data in the script
+            if (scriptContent.contains("\"chapter\":") && scriptContent.contains("\"images\":[")) {
+                try {
+                    // Try to find and parse the chapter JSON object that contains the images array
+                    val chapterStart = scriptContent.indexOf("\"chapter\":")
+                    if (chapterStart != -1) {
+                        // Find the opening brace for the chapter object
+                        val jsonStart = scriptContent.indexOf("{", chapterStart - 20)
+                        if (jsonStart != -1) {
+                            // Find the closing brace - count braces to find the matching one
+                            var braceCount = 0
+                            var jsonEnd = jsonStart
+                            for (i in jsonStart until scriptContent.length) {
+                                when (scriptContent[i]) {
+                                    '{' -> braceCount++
+                                    '}' -> {
+                                        braceCount--
+                                        if (braceCount == 0) {
+                                            jsonEnd = i + 1
+                                            break
+                                        }
+                                    }
+                                }
+                            }
+
+                            val jsonText = scriptContent.substring(jsonStart, jsonEnd)
+                            val chapterJson = JSONObject(jsonText)
+
+                            if (chapterJson.has("chapter")) {
+                                val chapterData = chapterJson.getJSONObject("chapter")
+                                if (chapterData.has("images")) {
+                                    images = chapterData.getJSONArray("images")
+                                    break
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    // If JSON parsing fails, try the old method
+                    continue
+                }
+            }
+
+            // Fallback to the old method
             if (scriptContent.contains("\"images\":[")) {
-                // Extract the images array from the JavaScript
-                val start = scriptContent.indexOf("\"images\":[")
-                val end = scriptContent.indexOf("]", start) + 1
-                val imagesJson = scriptContent.substring(start + 9, end)
-                images = JSONArray(imagesJson)
-                break
+                try {
+                    val start = scriptContent.indexOf("\"images\":[")
+                    val end = scriptContent.indexOf("]", start) + 1
+                    val imagesJson = scriptContent.substring(start + 9, end)
+                    images = JSONArray(imagesJson)
+                    break
+                } catch (e: Exception) {
+                    continue
+                }
             }
         }
 
@@ -256,18 +304,50 @@ internal class Comix(context: MangaLoaderContext) :
 
     private suspend fun getChapters(manga: Manga): List<MangaChapter> {
         val hashId = manga.url.substringAfter("/title/")
-        val chaptersUrl = "https://comix.to/api/v2/mangas/$hashId/chapters?order[number]=desc&limit=100"
+        val allChapters = mutableListOf<JSONObject>()
+        var page = 1
 
-        val response = webClient.httpGet(chaptersUrl).parseJson()
-        val result = response.getJSONObject("result")
-        val items = result.getJSONArray("items")
+        // Fetch all chapters with pagination
+        while (true) {
+            val chaptersUrl = "https://comix.to/api/v2/mangas/$hashId/chapters?order[number]=desc&limit=100&page=$page"
+            val response = webClient.httpGet(chaptersUrl).parseJson()
+            val result = response.getJSONObject("result")
+            val items = result.getJSONArray("items")
 
-        return (0 until items.length()).mapIndexedNotNull { index, i ->
-            val item = items.getJSONObject(i)
+            if (items.length() == 0) break
+
+            for (i in 0 until items.length()) {
+                allChapters.add(items.getJSONObject(i))
+            }
+
+            // Check pagination info to see if we have more pages
+            val pagination = result.optJSONObject("pagination")
+            if (pagination != null) {
+                val currentPage = pagination.getInt("current_page")
+                val lastPage = pagination.getInt("last_page")
+                if (currentPage >= lastPage) break
+            }
+
+            page++
+        }
+
+        // Group chapters by number and pick one translation per chapter (preferring latest)
+        val uniqueChapters = allChapters
+            .groupBy { it.getDouble("number") }
+            .mapValues { (_, chapters) ->
+                // Sort by creation date descending and take the first (most recent)
+                chapters.maxByOrNull { it.getLong("created_at") }!!
+            }
+            .values
+            .sortedByDescending { it.getDouble("number") } // Sort by chapter number descending
+
+        return uniqueChapters.mapIndexedNotNull { index, item ->
             val chapterId = item.getLong("chapter_id")
             val number = item.getDouble("number").toFloat()
             val name = item.optString("name", "").nullIfEmpty()
             val createdAt = item.getLong("created_at")
+            val scanlationGroup = item.optJSONObject("scanlation_group")
+            val scanlatorName = scanlationGroup?.optString("name", null)
 
             val title = if (name != null) {
                 "Chapter $number: $name"
@@ -283,7 +363,7 @@ internal class Comix(context: MangaLoaderContext) :
                 url = "/title/$hashId/$chapterId-chapter-${number.toInt()}",
                 uploadDate = createdAt * 1000L, // Convert to milliseconds
                 source = source,
-                scanlator = null,
+                scanlator = scanlatorName,
                 branch = null,
             )
         }.reversed() // Reverse to have ascending order

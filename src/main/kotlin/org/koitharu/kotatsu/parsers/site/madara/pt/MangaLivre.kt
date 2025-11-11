@@ -110,6 +110,7 @@ internal class MangaLivre(context: MangaLoaderContext) :
             }
 
             append("&m_orderby=")
+            
             when (order) {
                 SortOrder.POPULARITY -> append("views")
                 SortOrder.UPDATED -> append("latest")
@@ -124,7 +125,7 @@ internal class MangaLivre(context: MangaLoaderContext) :
         println("DEBUG: Loading URL via webview: $url")
         val requests = context.interceptWebViewRequests(
             url = url,
-            interceptorScript = "return url.includes(\"post_type=wp-manga\")",
+            interceptorScript = "return (url.includes(\"post_type=wp-manga\"))",
             timeout = 15000L
         )
 

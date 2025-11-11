@@ -124,14 +124,14 @@ internal class MangaLivre(context: MangaLoaderContext) :
         println("DEBUG: Loading URL via webview: $url")
         val requests = context.interceptWebViewRequests(
             url = url,
-            interceptorScript = "return url.includes('post_type=wp-manga')",
-            timeout = 15000L // 30 seconds
+            interceptorScript = "return url.includes(\"post_type=wp-manga\")",
+            timeout = 15000L
         )
 
-        if (requests.isNotEmpty()) {
-            val mainDocumentRequest = requests.first()
-            val html = mainDocumentRequest.body?.toString()
+        val mainDocumentRequest = requests.firstOrNull()
 
+        if (mainDocumentRequest != null) {
+            val html = mainDocumentRequest.body?.toString()
             if (html.isNullOrBlank()) {
                 println("ERROR: Intercepted request for ${mainDocumentRequest.url} but the body was empty.")
                 throw ParseException("Intercepted request for main document had an empty body", url)
@@ -142,8 +142,7 @@ internal class MangaLivre(context: MangaLoaderContext) :
             return parseMangaList(doc)
         } else {
             println("ERROR: No request matching the interceptor script was captured.")
-            throw ParseException("Failed to intercept the main webview request with the script.", url)
-
+            throw ParseException("Failed to intercept the main webview request. The filter script did not match any URLs.", url)
         }
     }
 

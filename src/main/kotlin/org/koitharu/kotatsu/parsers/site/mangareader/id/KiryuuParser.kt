@@ -12,302 +12,265 @@ import java.text.SimpleDateFormat
 
 @MangaSourceParser("KIRYUU", "Kiryuu", "id")
 internal class KiryuuParser(context: MangaLoaderContext) :
-	MangaReaderParser(context, MangaParserSource.KIRYUU, "kiryuu03.com", pageSize = 50, searchPageSize = 10) {
+    MangaReaderParser(context, MangaParserSource.KIRYUU, "kiryuu03.com", pageSize = 50, searchPageSize = 10) {
 
-	override val listUrl = "/manga/"
+    override val listUrl = "/manga/"
 
-	override val filterCapabilities: MangaListFilterCapabilities
-		get() = super.filterCapabilities.copy(
-			isTagsExclusionSupported = false,
-		)
+    override val filterCapabilities: MangaListFilterCapabilities
+        get() = super.filterCapabilities.copy(
+            isTagsExclusionSupported = false,
+        )
 
-	// Override description selector for WordPress block theme
-	override val detailsDescriptionSelector = "[itemprop='description'], [itemprop='description'] p, .entry-content p, .synopsis, .description, [class*='description'], [class*='synopsis'], .summary, .wp-block-paragraph, .content p"
+    // Override description selector for WordPress block theme
+    override val detailsDescriptionSelector = "[itemprop='description'], [itemprop='description'] p, .entry-content p, .synopsis, .description, [class*='description'], [class*='synopsis'], .summary, .wp-block-paragraph, .content p"
 
-	// Override to handle AJAX search
-	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
-		if (!filter.query.isNullOrEmpty()) {
-			return performAjaxSearch(filter.query)
-		}
-		return super.getListPage(page, order, filter)
-	}
+    // Override to handle paginated search instead of AJAX search
+    override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
+        if (!filter.query.isNullOrEmpty()) {
+            // Handle paginated search using WordPress URL structure
+            // Example URL: /manga/page/2/?s=query&the_type=comic,manga,manhua,manhwa&the_orderby=date
 
-	private suspend fun performAjaxSearch(query: String): List<Manga> {
-		try {
-			// First, get nonce from main page
-			val mainPage = webClient.httpGet("https://$domain/").parseHtml()
-			val pageHtml = mainPage.html()
+            // Map SortOrder to the `the_orderby` parameter value
+            val orderByParam = when (order) {
+                SortOrder.POPULARITY -> "popular"
+                SortOrder.NEWEST -> "latest"
+                SortOrder.ALPHABETICAL -> "title"
+                else -> "date" // Default to date for RELEVANCE and UPDATED
+            }
 
-			// Try multiple ways to extract nonce
-			val nonce = Regex("nonce[\"']\\s*:\\s*[\"']([^\"']+)[\"']").find(pageHtml)?.groupValues?.get(1)
-				?: Regex("nonce=([a-f0-9]+)").find(pageHtml)?.groupValues?.get(1)
-				?: "eadaed75c9" // Fallback from intercepted request
+            val searchUrl = buildString {
+                append("https://$domain$listUrl")
+                if (page > 1) {
+                    append("page/$page/")
+                }
+                // Use 's' for the search query, which is standard for WordPress
+                append("?s=${filter.query.urlEncoded()}")
+                append("&the_type=comic%2Cmanga%2Cmanhua%2Cmanhwa") // Filter out novels as requested
+                append("&the_orderby=$orderByParam")
+            }
 
-			// Make AJAX search request with HTMX headers
-			val searchUrl = "https://$domain/wp-admin/admin-ajax.php?nonce=$nonce&action=search"
+            val document = webClient.httpGet(searchUrl).parseHtml()
+            return parseMangaList(document)
+        }
 
-			// Add required HTMX headers for search to work
-			val extraHeaders = headersOf(
-				"Hx-Request", "true",
-				"Hx-Trigger-Name", "query",
-				"Hx-Target", "searchModalContent",
-				"Hx-Current-Url", "https://$domain/",
-				"Content-Type", "application/x-www-form-urlencoded"
-			)
+        // For non-search requests, use the default implementation from the parent class
+        return super.getListPage(page, order, filter)
+    }
 
-			// Send raw body as "query=search_term" - matches intercepted format exactly
-			val requestBody = "query=$query"
-			val response = webClient.httpPost(searchUrl.toHttpUrl(), requestBody, extraHeaders)
+    // Override parsing for new Kiryuu structure with multiple fallback approaches
+    override fun parseMangaList(docs: Document): List<Manga> {
+        // Get all manga links and group them by URL since title and image are in separate <a> tags
+        val allMangaLinks = docs.select("a[href*='/manga/']:not([href*='chapter']):not([href*='page='])")
+            .filter { a ->
+                val href = a.attr("href")
+                // Make sure this is a manga detail link, not chapter or pagination
+                href.matches(Regex(".*/manga/[^/]+/?$"))
+            }
 
-			val searchResults = response.parseHtml()
+        // Group links by URL to combine image and title links
+        val mangaMap = mutableMapOf<String, MangaData>()
 
-			// Parse AJAX response - match the exact structure from intercepted response
-			return searchResults.select("a[href*='/manga/']").filter { a ->
-				// Skip the "Show more" link
-				!a.text().contains("Show more") && a.selectFirst("h3") != null
-			}.mapNotNull { a ->
-				val url = a.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
-				if (!url.contains("/manga/")) return@mapNotNull null
+        for (link in allMangaLinks) {
+            val url = link.attrAsRelativeUrlOrNull("href") ?: continue
 
-				val title = a.selectFirst("h3")?.text()?.trim() ?: return@mapNotNull null
-				val img = a.selectFirst("img")
-				val coverUrl = img?.attr("src")?.takeIf { it.isNotBlank() }
+            val data = mangaMap.getOrPut(url) { MangaData(url) }
 
-				Manga(
-					id = generateUid(url),
-					url = url,
-					title = title,
-					altTitles = emptySet(),
-					publicUrl = a.attrAsAbsoluteUrl("href"),
-					rating = RATING_UNKNOWN,
-					contentRating = if (isNsfwSource) ContentRating.ADULT else null,
-					coverUrl = coverUrl,
-					tags = emptySet(),
-					state = null,
-					authors = emptySet(),
-					source = source,
-				)
-			}
-		} catch (e: Exception) {
-			// Fallback to empty list if AJAX search fails
-			return emptyList()
-		}
-	}
+            // Check if this link has an image
+            val img = link.selectFirst("img")
+            if (img != null) {
+                data.coverUrl = img.attr("src").takeIf { it.isNotBlank() }
+                    ?: img.attr("data-src").takeIf { it.isNotBlank() }
+                        ?: img.attr("data-lazy-src").takeIf { it.isNotBlank() }
+            }
 
-	// Override parsing for new Kiryuu structure with multiple fallback approaches
-	override fun parseMangaList(docs: Document): List<Manga> {
-		// Get all manga links and group them by URL since title and image are in separate <a> tags
-		val allMangaLinks = docs.select("a[href*='/manga/']:not([href*='chapter']):not([href*='page='])")
-			.filter { a ->
-				val href = a.attr("href")
-				// Make sure this is a manga detail link, not chapter or pagination
-				href.matches(Regex(".*/manga/[^/]+/?$"))
-			}
+            // Check if this link has a title
+            val title = link.selectFirst("h2, h3, h1, .title, [class*='title']")?.text()?.trim()
+                ?: link.attr("title")?.takeIf { it.isNotBlank() }
+                ?: link.attr("aria-label")?.takeIf { it.isNotBlank() }
+                ?: link.ownText().trim().takeIf { it.isNotEmpty() && it.length > 2 }
 
-		// Group links by URL to combine image and title links
-		val mangaMap = mutableMapOf<String, MangaData>()
+            if (title != null) {
+                data.title = title
+            }
 
-		for (link in allMangaLinks) {
-			val url = link.attrAsRelativeUrlOrNull("href") ?: continue
+            // Look for rating in this link or nearby elements
+            val rating = link.selectFirst("[class*='rating'], .score, [class*='score']")?.text()?.trim()
+                ?: link.parent()?.selectFirst("[class*='rating'], .score, [class*='score']")?.text()?.trim()
+                ?: link.nextElementSibling()?.selectFirst("[class*='rating'], .score, [class*='score']")?.text()?.trim()
 
-			val data = mangaMap.getOrPut(url) { MangaData(url) }
+            if (rating != null) {
+                data.rating = Regex("(\\d+(?:\\.\\d+)?)").find(rating)?.value?.toFloatOrNull() ?: RATING_UNKNOWN
+            }
+        }
 
-			// Check if this link has an image
-			val img = link.selectFirst("img")
-			if (img != null) {
-				data.coverUrl = img.attr("src").takeIf { it.isNotBlank() }
-					?: img.attr("data-src").takeIf { it.isNotBlank() }
-					?: img.attr("data-lazy-src").takeIf { it.isNotBlank() }
-			}
+        // Convert to Manga objects
+        return mangaMap.values.mapNotNull { data ->
+            if (data.title == null) return@mapNotNull null // Must have a title
 
-			// Check if this link has a title
-			val title = link.selectFirst("h2, h3, h1, .title, [class*='title']")?.text()?.trim()
-				?: link.attr("title")?.takeIf { it.isNotBlank() }
-				?: link.attr("aria-label")?.takeIf { it.isNotBlank() }
-				?: link.ownText().trim().takeIf { it.isNotEmpty() && it.length > 2 }
+            Manga(
+                id = generateUid(data.url),
+                url = data.url,
+                title = data.title!!,
+                altTitles = emptySet(),
+                publicUrl = "https://$domain${data.url}",
+                rating = data.rating,
+                contentRating = if (isNsfwSource) ContentRating.ADULT else null,
+                coverUrl = data.coverUrl,
+                tags = emptySet(),
+                state = null,
+                authors = emptySet(),
+                source = source,
+            )
+        }
+    }
 
-			if (title != null) {
-				data.title = title
-			}
+    private data class MangaData(
+        val url: String,
+        var title: String? = null,
+        var coverUrl: String? = null,
+        var rating: Float = RATING_UNKNOWN
+    )
 
-			// Look for rating in this link or nearby elements
-			val rating = link.selectFirst("[class*='rating'], .score, [class*='score']")?.text()?.trim()
-				?: link.parent()?.selectFirst("[class*='rating'], .score, [class*='score']")?.text()?.trim()
-				?: link.nextElementSibling()?.selectFirst("[class*='rating'], .score, [class*='score']")?.text()?.trim()
+    // Override chapter parsing for Kiryuu's structure - uses AJAX to load chapters
+    override suspend fun getDetails(manga: Manga): Manga {
+        val docs = webClient.httpGet(manga.url.toAbsoluteUrl(domain)).parseHtml()
 
-			if (rating != null) {
-				data.rating = Regex("(\\d+(?:\\.\\d+)?)").find(rating)?.value?.toFloatOrNull() ?: RATING_UNKNOWN
-			}
-		}
+        // Extract manga_id from the bookmark button or other elements with manga_id
+        val mangaIdMatch = Regex("manga_id=(\\d+)").find(docs.html())
+        val mangaId = mangaIdMatch?.groupValues?.get(1)
 
-		// Convert to Manga objects
-		return mangaMap.values.mapNotNull { data ->
-			if (data.title == null) return@mapNotNull null // Must have a title
+        var chapters = emptyList<MangaChapter>()
 
-			Manga(
-				id = generateUid(data.url),
-				url = data.url,
-				title = data.title!!,
-				altTitles = emptySet(),
-				publicUrl = "https://$domain${data.url}",
-				rating = data.rating,
-				contentRating = if (isNsfwSource) ContentRating.ADULT else null,
-				coverUrl = data.coverUrl,
-				tags = emptySet(),
-				state = null,
-				authors = emptySet(),
-				source = source,
-			)
-		}
-	}
+        if (mangaId != null) {
+            try {
+                // Use AJAX endpoint to get chapters JSON
+                val chaptersUrl = "https://$domain/wp-admin/admin-ajax.php?action=get_chapters&manga_id=$mangaId"
+                val response = webClient.httpGet(chaptersUrl)
+                val jsonResponse = response.parseJson()
 
-	private data class MangaData(
-		val url: String,
-		var title: String? = null,
-		var coverUrl: String? = null,
-		var rating: Float = RATING_UNKNOWN
-	)
+                val success = jsonResponse.getBoolean("success")
+                if (success) {
+                    val data = jsonResponse.getJSONArray("data")
+                    chapters = (0 until data.length()).mapNotNull { i ->
+                        val chapter = data.getJSONObject(i)
+                        val title = chapter.getString("title")
+                        val url = chapter.getString("url")
+                        val chapterNum = Regex("Chapter\\s+(\\d+(?:\\.\\d+)?)").find(title)?.groupValues?.get(1)?.toFloatOrNull() ?: (i + 1).toFloat()
 
-	// Override chapter parsing for Kiryuu's structure - uses AJAX to load chapters
-	override suspend fun getDetails(manga: Manga): Manga {
-		val docs = webClient.httpGet(manga.url.toAbsoluteUrl(domain)).parseHtml()
+                        MangaChapter(
+                            id = generateUid(url),
+                            title = title,
+                            url = url.removePrefix("https://$domain"),
+                            number = chapterNum,
+                            volume = 0,
+                            scanlator = null,
+                            uploadDate = 0L,
+                            branch = null,
+                            source = source,
+                        )
+                    }.sortedBy { it.number }
+                }
+            } catch (e: Exception) {
+                // Fall back to HTML parsing if AJAX fails
+            }
+        }
 
-		// Extract manga_id from the bookmark button or other elements with manga_id
-		val mangaIdMatch = Regex("manga_id=(\\d+)").find(docs.html())
-		val mangaId = mangaIdMatch?.groupValues?.get(1)
+        // If AJAX failed, try to find chapters in the static HTML (fallback)
+        if (chapters.isEmpty()) {
+            chapters = docs.select("a[href*='chapter']").filter { element ->
+                val href = element.attr("href")
+                href.contains("/chapter-") && Regex("/chapter-\\d+\\.\\d+").containsMatchIn(href)
+            }.mapNotNull { element ->
+                val url = element.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
+                if (!url.contains("/chapter-")) return@mapNotNull null
 
-		var chapters = emptyList<MangaChapter>()
+                val chapterText = element.text().trim()
+                val title = when {
+                    chapterText.isNotEmpty() && chapterText.contains("Chapter", ignoreCase = true) -> chapterText
+                    chapterText.isNotEmpty() && chapterText.matches(Regex("\\d+.*")) -> "Chapter $chapterText"
+                    else -> {
+                        // Extract chapter number from URL - handle the .XXXXXX suffix pattern
+                        val chapterNum = Regex("/chapter[.-](\\d+)(?:\\.\\d+)?").find(url)?.groupValues?.get(1)
+                            ?: Regex("(?:chapter|ch)[.-](\\d+)").find(url)?.groupValues?.get(1)
+                            ?: Regex("/(\\d+)/?$").find(url)?.groupValues?.get(1)
+                        chapterNum?.let { "Chapter $it" }
+                    }
+                } ?: return@mapNotNull null
 
-		if (mangaId != null) {
-			try {
-				// Use AJAX endpoint to get chapters JSON
-				val chaptersUrl = "https://$domain/wp-admin/admin-ajax.php?action=get_chapters&manga_id=$mangaId"
-				val response = webClient.httpGet(chaptersUrl)
-				val jsonResponse = response.parseJson()
+                // Extract chapter number for sorting
+                val chapterNumber = Regex("(\\d+(?:\\.\\d+)?)").find(title)?.value?.toFloatOrNull() ?: 0f
 
-				val success = jsonResponse.getBoolean("success")
-				if (success) {
-					val data = jsonResponse.getJSONArray("data")
-					chapters = (0 until data.length()).mapNotNull { i ->
-						val chapter = data.getJSONObject(i)
-						val title = chapter.getString("title")
-						val url = chapter.getString("url")
-						val chapterNum = Regex("Chapter\\s+(\\d+(?:\\.\\d+)?)").find(title)?.groupValues?.get(1)?.toFloatOrNull() ?: (i + 1).toFloat()
+                MangaChapter(
+                    id = generateUid(url),
+                    title = title,
+                    url = url,
+                    number = chapterNumber,
+                    volume = 0,
+                    scanlator = null,
+                    uploadDate = 0L,
+                    branch = null,
+                    source = source,
+                )
+            }.distinctBy { it.url }.sortedBy { it.number }
+        }
 
-						MangaChapter(
-							id = generateUid(url),
-							title = title,
-							url = url.removePrefix("https://$domain"),
-							number = chapterNum,
-							volume = 0,
-							scanlator = null,
-							uploadDate = 0L,
-							branch = null,
-							source = source,
-						)
-					}.sortedBy { it.number }
-				}
-			} catch (e: Exception) {
-				// Fall back to HTML parsing if AJAX fails
-			}
-		}
+        // If still no chapters found, create a single read button
+        if (chapters.isEmpty()) {
+            val readButton = docs.select("a").find { element ->
+                val text = element.text().lowercase()
+                val href = element.attr("href")
+                (text.contains("read") || text.contains("chapter"))
+                    && href.contains("/chapter") && !href.contains("/manga/")
+            }
 
-		// If AJAX failed, try to find chapters in the static HTML (fallback)
-		if (chapters.isEmpty()) {
-			chapters = docs.select("a[href*='chapter']").filter { element ->
-				val href = element.attr("href")
-				href.contains("/chapter-") && Regex("/chapter-\\d+\\.\\d+").containsMatchIn(href)
-			}.mapNotNull { element ->
-				val url = element.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
-				if (!url.contains("/chapter-")) return@mapNotNull null
+            if (readButton != null) {
+                val url = readButton.attrAsRelativeUrlOrNull("href")
+                if (url != null) {
+                    chapters = listOf(
+                        MangaChapter(
+                            id = generateUid(url),
+                            title = "Chapter 1",
+                            url = url,
+                            number = 1f,
+                            volume = 0,
+                            scanlator = null,
+                            uploadDate = 0L,
+                            branch = null,
+                            source = source,
+                        )
+                    )
+                }
+            }
+        }
 
-				val chapterText = element.text().trim()
-				val title = when {
-					chapterText.isNotEmpty() && chapterText.contains("Chapter", ignoreCase = true) -> chapterText
-					chapterText.isNotEmpty() && chapterText.matches(Regex("\\d+.*")) -> "Chapter $chapterText"
-					else -> {
-						// Extract chapter number from URL - handle the .XXXXXX suffix pattern
-						val chapterNum = Regex("/chapter[.-](\\d+)(?:\\.\\d+)?").find(url)?.groupValues?.get(1)
-							?: Regex("(?:chapter|ch)[.-](\\d+)").find(url)?.groupValues?.get(1)
-							?: Regex("/(\\d+)/?$").find(url)?.groupValues?.get(1)
-						chapterNum?.let { "Chapter $it" }
-					}
-				} ?: return@mapNotNull null
+        return parseInfo(docs, manga, chapters)
+    }
 
-				// Extract chapter number for sorting
-				val chapterNumber = Regex("(\\d+(?:\\.\\d+)?)").find(title)?.value?.toFloatOrNull() ?: 0f
+    // Override chapter image parsing for Kiryuu's structure
+    override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
+        val docs = webClient.httpGet(chapter.url.toAbsoluteUrl(domain)).parseHtml()
 
-				MangaChapter(
-					id = generateUid(url),
-					title = title,
-					url = url,
-					number = chapterNumber,
-					volume = 0,
-					scanlator = null,
-					uploadDate = 0L,
-					branch = null,
-					source = source,
-				)
-			}.distinctBy { it.url }.sortedBy { it.number }
-		}
+        // Find the section containing all chapter images
+        val imageSection = docs.selectFirst("section[data-image-data]")
+            ?: docs.selectFirst("section img")?.parent()
+            ?: docs.selectFirst("[class*='chapter'] img")?.parent()
+            ?: docs.body()
 
-		// If still no chapters found, create a single read button
-		if (chapters.isEmpty()) {
-			val readButton = docs.select("a").find { element ->
-				val text = element.text().lowercase()
-				val href = element.attr("href")
-				(text.contains("read") || text.contains("chapter"))
-					&& href.contains("/chapter") && !href.contains("/manga/")
-			}
+        // Extract all images from the section
+        val images = imageSection.select("img").mapNotNull { img ->
+            val src = img.attr("src").takeIf { it.isNotBlank() }
+                ?: img.attr("data-src").takeIf { it.isNotBlank() }
+                ?: img.attr("data-lazy-src").takeIf { it.isNotBlank() }
+            src?.let { it.toAbsoluteUrl(docs.location()) }
+        }
 
-			if (readButton != null) {
-				val url = readButton.attrAsRelativeUrlOrNull("href")
-				if (url != null) {
-					chapters = listOf(
-						MangaChapter(
-							id = generateUid(url),
-							title = "Chapter 1",
-							url = url,
-							number = 1f,
-							volume = 0,
-							scanlator = null,
-							uploadDate = 0L,
-							branch = null,
-							source = source,
-						)
-					)
-				}
-			}
-		}
-
-		return parseInfo(docs, manga, chapters)
-	}
-
-	// Override chapter image parsing for Kiryuu's structure
-	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-		val docs = webClient.httpGet(chapter.url.toAbsoluteUrl(domain)).parseHtml()
-
-		// Find the section containing all chapter images
-		val imageSection = docs.selectFirst("section[data-image-data]")
-			?: docs.selectFirst("section img")?.parent()
-			?: docs.selectFirst("[class*='chapter'] img")?.parent()
-			?: docs.body()
-
-		// Extract all images from the section
-		val images = imageSection.select("img").mapNotNull { img ->
-			val src = img.attr("src").takeIf { it.isNotBlank() }
-				?: img.attr("data-src").takeIf { it.isNotBlank() }
-				?: img.attr("data-lazy-src").takeIf { it.isNotBlank() }
-			src?.let { it.toAbsoluteUrl(docs.location()) }
-		}
-
-		return images.mapIndexed { index, url ->
-			MangaPage(
-				id = generateUid(url),
-				url = url,
-				preview = null,
-				source = source,
-			)
-		}
-	}
+        return images.mapIndexed { index, url ->
+            MangaPage(
+                id = generateUid(url),
+                url = url,
+                preview = null,
+                source = source,
+            )
+        }
+    }
 }

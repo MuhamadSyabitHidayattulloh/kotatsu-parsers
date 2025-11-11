@@ -158,9 +158,6 @@ internal class Comix(context: MangaLoaderContext) :
             addParam("genres[]=-87266") // Hentai
             addParam("genres[]=-87268") // Smut
             addParam("genres[]=-87265") // Ecchi
-
-            addParam("types[]=manhwa")
-            addParam("types[]=manhua")
             addParam("limit=$pageSize")
             addParam("page=$page")
         }

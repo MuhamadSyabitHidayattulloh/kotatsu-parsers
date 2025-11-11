@@ -15,6 +15,43 @@ internal class MangaLivre(context: MangaLoaderContext) :
 	override val datePattern = "MMMM dd, yyyy"
 	override val withoutAjax = true
 
+	// Override fetchAvailableTags to also use webview
+	override suspend fun fetchAvailableTags(): Set<MangaTag> {
+		println("DEBUG: MangaLivre.fetchAvailableTags called")
+		val url = "https://$domain/$listUrl"
+		println("DEBUG: Loading tags URL via webview: $url")
+		val html = context.evaluateJs(url, "document.documentElement.outerHTML")
+		if (html == null) {
+			println("ERROR: Webview returned null HTML for tags")
+			throw ParseException("Failed to load tags via webview", url)
+		}
+		println("DEBUG: Webview returned tags HTML (length=${html.length})")
+		val doc = Jsoup.parse(html, url)
+
+		val body = doc.body()
+		val root1 = body.selectFirst("header")?.selectFirst("ul.second-menu")
+		val root2 = body.selectFirst("div.genres_wrap")?.selectFirst("ul.list-unstyled")
+		if (root1 == null && root2 == null) {
+			return emptySet()
+		}
+		val list = root1?.select("li").orEmpty() + root2?.select("li").orEmpty()
+		val keySet = HashSet<String>(list.size)
+		return list.mapNotNullToSet { li ->
+			val a = li.selectFirst("a") ?: return@mapNotNullToSet null
+			val href = a.attr("href").removeSuffix('/').substringAfterLast(tagPrefix, "")
+			if (href.isEmpty() || !keySet.add(href)) {
+				return@mapNotNullToSet null
+			}
+			MangaTag(
+				key = href,
+				title = a.ownText().ifEmpty {
+					a.selectFirst(".menu-image-title")?.textOrNull()
+				}?.toTitleCase(sourceLocale) ?: return@mapNotNullToSet null,
+				source = source,
+			)
+		}
+	}
+
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
 		println("DEBUG: MangaLivre.getListPage called with page=$page")
 
@@ -91,6 +128,7 @@ internal class MangaLivre(context: MangaLoaderContext) :
 			throw ParseException("Failed to load page via webview", url)
 		}
 		println("DEBUG: Webview returned HTML (length=${html.length})")
+		println("DEBUG: First 200 chars of HTML: ${html.take(200)}")
 		val doc = Jsoup.parse(html, url)
 		return parseMangaList(doc)
 	}

@@ -16,6 +16,8 @@ internal class MangaLivre(context: MangaLoaderContext) :
 	override val withoutAjax = true
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
+		println("DEBUG: MangaLivre.getListPage called with page=$page")
+
 		val pages = page + 1
 
 		val url = buildString {
@@ -82,18 +84,30 @@ internal class MangaLivre(context: MangaLoaderContext) :
 		}
 
 		// Use webview for Cloudflare bypass
+		println("DEBUG: Loading URL via webview: $url")
 		val html = context.evaluateJs(url, "document.documentElement.outerHTML")
-			?: throw ParseException("Failed to load page via webview", url)
+		if (html == null) {
+			println("ERROR: Webview returned null HTML")
+			throw ParseException("Failed to load page via webview", url)
+		}
+		println("DEBUG: Webview returned HTML (length=${html.length})")
 		val doc = Jsoup.parse(html, url)
 		return parseMangaList(doc)
 	}
 
 	override suspend fun getDetails(manga: Manga): Manga {
+		println("DEBUG: MangaLivre.getDetails called for: ${manga.title}")
+
 		val fullUrl = manga.url.toAbsoluteUrl(domain)
 
 		// Use webview for Cloudflare bypass
+		println("DEBUG: Loading details URL via webview: $fullUrl")
 		val html = context.evaluateJs(fullUrl, "document.documentElement.outerHTML")
-			?: throw ParseException("Failed to load manga details via webview", fullUrl)
+		if (html == null) {
+			println("ERROR: Webview returned null HTML for details")
+			throw ParseException("Failed to load manga details via webview", fullUrl)
+		}
+		println("DEBUG: Webview returned details HTML (length=${html.length})")
 		val doc = Jsoup.parse(html, fullUrl)
 
 		val chapters = loadChapters(manga.url, doc)

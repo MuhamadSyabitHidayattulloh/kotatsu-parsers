@@ -124,34 +124,29 @@ internal class MangaLivre(context: MangaLoaderContext) :
         println("DEBUG: Loading URL via webview: $url")
         val requests = context.interceptWebViewRequests(
             url = url,
-            interceptorScript = "post_type=wp-manga",
+            interceptorScript = "return url.includes('post_type=wp-manga')",
             timeout = 15000L // 30 seconds
         )
 
-        // Check if we specifically intercepted the main document.
-        val mainDocumentRequest = requests.firstOrNull { it.url.contains("post_type=wp-manga") }
-
-        if (mainDocumentRequest != null) {
-            // The body might be null if the request failed, so handle that case.
+        if (requests.isNotEmpty()) {
+            val mainDocumentRequest = requests.first()
             val html = mainDocumentRequest.body?.toString()
+
             if (html.isNullOrBlank()) {
-                println("ERROR: Intercepted request but the body was empty.")
+                println("ERROR: Intercepted request for ${mainDocumentRequest.url} but the body was empty.")
                 throw ParseException("Intercepted request for main document had an empty body", url)
             }
 
-            println("DEBUG: Intercepted response for ${mainDocumentRequest.url} (length=${html.length})")
+            println("DEBUG: Successfully intercepted main document: ${mainDocumentRequest.url} (length=${html.length})")
             val doc = Jsoup.parse(html, url)
             return parseMangaList(doc)
         } else {
-            println("ERROR: No requests were intercepted that matched the filter.")
-            // You can add this for better debugging if it still fails:
-            if (requests.isNotEmpty()) {
-                println("DEBUG: Intercepted other requests, but not the main document. URLs found:")
-                requests.forEach { println(" - ${it.url}") }
-            }
-            throw ParseException("Failed to intercept the main webview request", url)
+            println("ERROR: No request matching the interceptor script was captured.")
+            throw ParseException("Failed to intercept the main webview request with the script.", url)
+
         }
     }
+
 	override suspend fun getDetails(manga: Manga): Manga {
 		println("DEBUG: MangaLivre.getDetails called for: ${manga.title}")
 

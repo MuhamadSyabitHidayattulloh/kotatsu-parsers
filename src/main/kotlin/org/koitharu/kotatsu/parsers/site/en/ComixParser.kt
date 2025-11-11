@@ -28,12 +28,14 @@ internal class Comix(context: MangaLoaderContext) :
             isTagsExclusionSupported = false,
         )
 
-    override val availableSortOrders: Set<SortOrder> = EnumSet.of(
-        SortOrder.RELEVANCE,
-        SortOrder.UPDATED,
-        SortOrder.POPULARITY,
-        SortOrder.NEWEST,
-        SortOrder.ALPHABETICAL
+    override val availableSortOrders: Set<SortOrder> = LinkedHashSet(
+        listOf(
+            SortOrder.RELEVANCE,
+            SortOrder.UPDATED,
+            SortOrder.POPULARITY,
+            SortOrder.NEWEST,
+            SortOrder.ALPHABETICAL
+        )
     )
 
     override suspend fun getFilterOptions() = MangaListFilterOptions(
@@ -115,6 +117,7 @@ internal class Comix(context: MangaLoaderContext) :
     }
 
     // kotlin
+    // kotlin
     override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
         val url = buildString {
             append("https://comix.to/api/v2/mangas?")
@@ -128,31 +131,19 @@ internal class Comix(context: MangaLoaderContext) :
                 }
             }
 
-            val isSearch = !filter.query.isNullOrEmpty() || filter.tags.isNotEmpty()
+            // Search keyword if provided
+            if (!filter.query.isNullOrEmpty()) {
+                addParam("keyword=${filter.query.urlEncoded()}")
+            }
 
-            if (isSearch) {
-                if (!filter.query.isNullOrEmpty()) {
-                    addParam("keyword=${filter.query.urlEncoded()}")
-                }
-
-                // For searches default to relevance; allow explicit override via SortOrder
-                when (order) {
-                    SortOrder.RELEVANCE -> addParam("order=relevance")
-                    SortOrder.UPDATED -> addParam("order[chapter_updated_at]=desc")
-                    SortOrder.POPULARITY -> addParam("order[views_30d]=desc")
-                    SortOrder.NEWEST -> addParam("order[created_at]=desc")
-                    SortOrder.ALPHABETICAL -> addParam("order[title]=asc")
-                    else -> addParam("order=relevance")
-                }
-            } else {
-                // Non-search listing: use the requested sort order
-                when (order) {
-                    SortOrder.UPDATED -> addParam("order[chapter_updated_at]=desc")
-                    SortOrder.POPULARITY -> addParam("order[views_30d]=desc")
-                    SortOrder.NEWEST -> addParam("order[created_at]=desc")
-                    SortOrder.ALPHABETICAL -> addParam("order[title]=asc")
-                    else -> addParam("order[chapter_updated_at]=desc")
-                }
+            // Use the provided sort order directly
+            when (order) {
+                SortOrder.RELEVANCE -> addParam("order[relevance]=desc")
+                SortOrder.UPDATED -> addParam("order[chapter_updated_at]=desc")
+                SortOrder.POPULARITY -> addParam("order[views_30d]=desc")
+                SortOrder.NEWEST -> addParam("order[created_at]=desc")
+                SortOrder.ALPHABETICAL -> addParam("order[title]=asc")
+                else -> addParam("order[chapter_updated_at]=desc")
             }
 
             // Handle genre filtering

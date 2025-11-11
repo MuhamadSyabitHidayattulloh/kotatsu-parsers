@@ -8,6 +8,7 @@ import org.koitharu.kotatsu.parsers.exception.ParseException
 import org.koitharu.kotatsu.parsers.model.*
 import org.koitharu.kotatsu.parsers.site.madara.MadaraParser
 import org.koitharu.kotatsu.parsers.util.*
+import org.koitharu.kotatsu.parsers.webview.InterceptedRequest
 
 @MangaSourceParser("MANGALIVRE", "Manga Livre", "pt")
 internal class MangaLivre(context: MangaLoaderContext) :
@@ -122,15 +123,23 @@ internal class MangaLivre(context: MangaLoaderContext) :
 
 		// Use webview for Cloudflare bypass
 		println("DEBUG: Loading URL via webview: $url")
-		val html = context.evaluateJs(url, "document.documentElement.outerHTML")
-		if (html == null) {
-			println("ERROR: Webview returned null HTML")
-			throw ParseException("Failed to load page via webview", url)
+		val requests = context.interceptWebViewRequests(
+			url = url,
+			interceptorScript = "return true;", // Intercept all requests
+			timeout = 15000L
+		)
+
+		if (requests.isNotEmpty()) {
+			val response = requests.first()
+			println("DEBUG: Intercepted response (length=${response.body.size})")
+			val html = response.body.decodeToString()
+			println("DEBUG: First 200 chars: ${html.take(200)}")
+			val doc = Jsoup.parse(html, url)
+			return parseMangaList(doc)
+		} else {
+			println("ERROR: No requests intercepted")
+			throw ParseException("Failed to intercept webview requests", url)
 		}
-		println("DEBUG: Webview returned HTML (length=${html.length})")
-		println("DEBUG: First 200 chars of HTML: ${html.take(200)}")
-		val doc = Jsoup.parse(html, url)
-		return parseMangaList(doc)
 	}
 
 	override suspend fun getDetails(manga: Manga): Manga {

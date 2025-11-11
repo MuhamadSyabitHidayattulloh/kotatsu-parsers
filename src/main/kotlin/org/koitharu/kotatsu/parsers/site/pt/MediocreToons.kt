@@ -70,24 +70,29 @@ internal class MediocreToons(context: MangaLoaderContext) : PagedMangaParser(
 		get() = Headers.Builder().add("Referer", "https://$domain/").add("Origin", "https://$domain").build()
 
 	private val chapterDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", sourceLocale)
+    
+    override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
+        val url = when {
+            // This part remains the same for handling searches and filters.
+            !filter.query.isNullOrEmpty() || filter.tags.isNotEmpty() || filter.states.isNotEmpty() || filter.types.isNotEmpty() -> buildSearchUrl(
+                page,
+                filter,
+            )
 
-	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
-		val url = when {
-			!filter.query.isNullOrEmpty() || filter.tags.isNotEmpty() || filter.states.isNotEmpty() || filter.types.isNotEmpty() -> buildSearchUrl(
-				page,
-				filter,
-			)
+            // This is the modified block for the default "latest" or "recent" list.
+            else -> {
+                "$apiUrl/obras/recentes".toHttpUrl().newBuilder()
+                    .addQueryParameter("limite", pageSize.toString()) // Or a fixed "20" if you prefer
+                    .addQueryParameter("pagina", page.toString())
+                    .addQueryParameter("formato", "5") // Added the new required parameter
+                    .build()
+            }
+        }
 
-			else -> {
-				"$apiUrl/obras".toHttpUrl().newBuilder().addQueryParameter("limite", pageSize.toString())
-					.addQueryParameter("pagina", page.toString()).build()
-			}
-		}
-
-		val response = webClient.httpGet(url, apiHeaders).parseJson()
-		val results = response.optJSONArray("data") ?: return emptyList()
-		return results.mapJSON { parseMangaFromJson(it) }
-	}
+        val response = webClient.httpGet(url, apiHeaders).parseJson()
+        val results = response.optJSONArray("data") ?: return emptyList()
+        return results.mapJSON { parseMangaFromJson(it) }
+    }
 
 	private fun buildSearchUrl(page: Int, filter: MangaListFilter): HttpUrl {
 		val builder = "$apiUrl/obras".toHttpUrl().newBuilder().addQueryParameter("limite", pageSize.toString())

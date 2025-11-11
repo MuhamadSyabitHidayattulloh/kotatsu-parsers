@@ -10,4 +10,5 @@ import org.koitharu.kotatsu.parsers.site.madara.MadaraParser
 internal class Hipercool(context: MangaLoaderContext) :
 	MadaraParser(context, MangaParserSource.HIPERCOOL, "hiper.cool", pageSize = 20) {
 	override val tagPrefix = "manga-tag/"
+	override val stylePage = ""
 }

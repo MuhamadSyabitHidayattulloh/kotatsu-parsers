@@ -29,6 +29,7 @@ internal class Comix(context: MangaLoaderContext) :
         )
 
     override val availableSortOrders: Set<SortOrder> = EnumSet.of(
+        SortOrder.RELEVANCE,
         SortOrder.UPDATED,
         SortOrder.POPULARITY,
         SortOrder.NEWEST,
@@ -134,8 +135,9 @@ internal class Comix(context: MangaLoaderContext) :
                     addParam("keyword=${filter.query.urlEncoded()}")
                 }
 
-                // Default to relevance for searches, but allow explicit SortOrder to override
+                // For searches default to relevance; allow explicit override via SortOrder
                 when (order) {
+                    SortOrder.RELEVANCE -> addParam("order=relevance")
                     SortOrder.UPDATED -> addParam("order[chapter_updated_at]=desc")
                     SortOrder.POPULARITY -> addParam("order[views_30d]=desc")
                     SortOrder.NEWEST -> addParam("order[created_at]=desc")

@@ -256,7 +256,7 @@ internal class Comix(context: MangaLoaderContext) :
 
     private suspend fun getChapters(manga: Manga): List<MangaChapter> {
         val hashId = manga.url.substringAfter("/title/")
-        val chaptersUrl = "https://comix.to/api/v2/mangas/$hashId/chapters?order[number]=desc&limit=1000"
+        val chaptersUrl = "https://comix.to/api/v2/mangas/$hashId/chapters?order[number]=desc&limit=100"
 
         val response = webClient.httpGet(chaptersUrl).parseJson()
         val result = response.getJSONObject("result")

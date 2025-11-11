@@ -24,14 +24,15 @@ internal class Comix(context: MangaLoaderContext) :
         get() = MangaListFilterCapabilities(
             isSearchSupported = true,
             isSearchWithFiltersSupported = true,
+            isMultipleTagsSupported = true,
+            isTagsExclusionSupported = false,
         )
 
     override val availableSortOrders: Set<SortOrder> = EnumSet.of(
         SortOrder.UPDATED,
         SortOrder.POPULARITY,
         SortOrder.NEWEST,
-        SortOrder.ALPHABETICAL,
-        SortOrder.RATING,
+        SortOrder.ALPHABETICAL
     )
 
     override suspend fun getFilterOptions() = MangaListFilterOptions(
@@ -127,7 +128,6 @@ internal class Comix(context: MangaLoaderContext) :
                     SortOrder.POPULARITY -> append("order[views_30d]=desc")
                     SortOrder.NEWEST -> append("order[created_at]=desc")
                     SortOrder.ALPHABETICAL -> append("order[title]=asc")
-                    SortOrder.RATING -> append("order[rated_avg]=desc")
                     else -> append("order[chapter_updated_at]=desc")
                 }
             }

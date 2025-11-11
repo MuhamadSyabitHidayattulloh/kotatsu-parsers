@@ -80,7 +80,7 @@ internal class MediocreToons(context: MangaLoaderContext) : PagedMangaParser(
 
 			else -> {
 				"$apiUrl/obras".toHttpUrl().newBuilder().addQueryParameter("limite", pageSize.toString())
-					.addQueryParameter("pagina", page.toString()).addQueryParameter("temCapitulo", "true").build()
+					.addQueryParameter("pagina", page.toString()).build()
 			}
 		}
 
@@ -91,7 +91,7 @@ internal class MediocreToons(context: MangaLoaderContext) : PagedMangaParser(
 
 	private fun buildSearchUrl(page: Int, filter: MangaListFilter): HttpUrl {
 		val builder = "$apiUrl/obras".toHttpUrl().newBuilder().addQueryParameter("limite", pageSize.toString())
-			.addQueryParameter("pagina", page.toString()).addQueryParameter("temCapitulo", "true")
+			.addQueryParameter("pagina", page.toString())
 
 		// Add search query
 		if (!filter.query.isNullOrEmpty()) {

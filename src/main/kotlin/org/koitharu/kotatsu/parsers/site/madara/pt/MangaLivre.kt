@@ -1,5 +1,6 @@
 package org.koitharu.kotatsu.parsers.site.madara.pt
 
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
@@ -83,7 +84,7 @@ internal class MangaLivre(context: MangaLoaderContext) :
 		// Use webview for Cloudflare bypass
 		val html = context.evaluateJs(url, "document.documentElement.outerHTML")
 			?: throw ParseException("Failed to load page via webview", url)
-		val doc = html.parseHtml(url)
+		val doc = Jsoup.parse(html, url)
 		return parseMangaList(doc)
 	}
 
@@ -93,8 +94,35 @@ internal class MangaLivre(context: MangaLoaderContext) :
 		// Use webview for Cloudflare bypass
 		val html = context.evaluateJs(fullUrl, "document.documentElement.outerHTML")
 			?: throw ParseException("Failed to load manga details via webview", fullUrl)
-		val doc = html.parseHtml(fullUrl)
+		val doc = Jsoup.parse(html, fullUrl)
 
-		return parseInfo(doc, manga, loadChapters(manga.url, doc))
+		val chapters = loadChapters(manga.url, doc)
+
+		val desc = doc.select(selectDesc).html()
+		val stateDiv = doc.selectFirst(selectState)?.selectLast("div.summary-content")
+		val state = stateDiv?.let {
+			when (it.text().lowercase()) {
+				in ongoing -> MangaState.ONGOING
+				in finished -> MangaState.FINISHED
+				in abandoned -> MangaState.ABANDONED
+				in paused -> MangaState.PAUSED
+				else -> null
+			}
+		}
+		val alt = doc.body().select(selectAlt).firstOrNull()?.tableValue()?.textOrNull()
+
+		return manga.copy(
+			title = doc.selectFirst("h1")?.textOrNull() ?: manga.title,
+			tags = doc.body().select(selectGenre).mapToSet { a -> createMangaTag(a) }.filterNotNull().toSet(),
+			description = desc,
+			altTitles = setOfNotNull(alt),
+			state = state,
+			chapters = chapters,
+			contentRating = if (doc.selectFirst(".adult-confirm") != null || isNsfwSource) {
+				ContentRating.ADULT
+			} else {
+				ContentRating.SAFE
+			},
+		)
 	}
 }

@@ -113,42 +113,63 @@ internal class Comix(context: MangaLoaderContext) :
         )
     }
 
+    // kotlin
     override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
         val url = buildString {
             append("https://comix.to/api/v2/mangas?")
+            var firstParam = true
+            fun addParam(param: String) {
+                if (firstParam) {
+                    append(param)
+                    firstParam = false
+                } else {
+                    append("&").append(param)
+                }
+            }
 
-            // Handle search by title
-            if (!filter.query.isNullOrEmpty()) {
-                append("keyword=").append(filter.query.urlEncoded())
-                append("&order[relevance]=desc")
-            } else {
-                // Default ordering
+            val isSearch = !filter.query.isNullOrEmpty() || filter.tags.isNotEmpty()
+
+            if (isSearch) {
+                if (!filter.query.isNullOrEmpty()) {
+                    addParam("keyword=${filter.query.urlEncoded()}")
+                }
+
+                // Default to relevance for searches, but allow explicit SortOrder to override
                 when (order) {
-                    SortOrder.UPDATED -> append("order[chapter_updated_at]=desc")
-                    SortOrder.POPULARITY -> append("order[views_30d]=desc")
-                    SortOrder.NEWEST -> append("order[created_at]=desc")
-                    SortOrder.ALPHABETICAL -> append("order[title]=asc")
-                    else -> append("order[chapter_updated_at]=desc")
+                    SortOrder.UPDATED -> addParam("order[chapter_updated_at]=desc")
+                    SortOrder.POPULARITY -> addParam("order[views_30d]=desc")
+                    SortOrder.NEWEST -> addParam("order[created_at]=desc")
+                    SortOrder.ALPHABETICAL -> addParam("order[title]=asc")
+                    else -> addParam("order=relevance")
+                }
+            } else {
+                // Non-search listing: use the requested sort order
+                when (order) {
+                    SortOrder.UPDATED -> addParam("order[chapter_updated_at]=desc")
+                    SortOrder.POPULARITY -> addParam("order[views_30d]=desc")
+                    SortOrder.NEWEST -> addParam("order[created_at]=desc")
+                    SortOrder.ALPHABETICAL -> addParam("order[title]=asc")
+                    else -> addParam("order[chapter_updated_at]=desc")
                 }
             }
 
             // Handle genre filtering
             if (filter.tags.isNotEmpty()) {
                 for (tag in filter.tags) {
-                    append("&genres[]=").append(tag.key)
+                    addParam("genres[]=${tag.key}")
                 }
             }
 
             // Default exclude adult content
-            append("&genres[]=-87264") // Adult
-            append("&genres[]=-87266") // Hentai
-            append("&genres[]=-87268") // Smut
-            append("&genres[]=-87265") // Ecchi
+            addParam("genres[]=-87264") // Adult
+            addParam("genres[]=-87266") // Hentai
+            addParam("genres[]=-87268") // Smut
+            addParam("genres[]=-87265") // Ecchi
 
-            append("&types[]=manhwa")
-            append("&types[]=manhua")
-            append("&limit=").append(pageSize)
-            append("&page=").append(page)
+            addParam("types[]=manhwa")
+            addParam("types[]=manhua")
+            addParam("limit=$pageSize")
+            addParam("page=$page")
         }
 
         val response = webClient.httpGet(url).parseJson()

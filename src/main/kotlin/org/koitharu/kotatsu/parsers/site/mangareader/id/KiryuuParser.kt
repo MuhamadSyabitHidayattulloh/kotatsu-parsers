@@ -24,37 +24,99 @@ internal class KiryuuParser(context: MangaLoaderContext) :
     // Override description selector for WordPress block theme
     override val detailsDescriptionSelector = "[itemprop='description'], [itemprop='description'] p, .entry-content p, .synopsis, .description, [class*='description'], [class*='synopsis'], .summary, .wp-block-paragraph, .content p"
 
-    // Override to handle paginated search instead of AJAX search
+    // Override to handle pagination and always include content type filter
     override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
         if (!filter.query.isNullOrEmpty()) {
-            // Handle paginated search using WordPress URL structure
-            // Example URL: /manga/page/2/?s=query&the_type=comic,manga,manhua,manhwa&the_orderby=date
-
-            // Map SortOrder to the `the_orderby` parameter value
-            val orderByParam = when (order) {
-                SortOrder.POPULARITY -> "popular"
-                SortOrder.NEWEST -> "latest"
-                SortOrder.ALPHABETICAL -> "title"
-                else -> "date" // Default to date for RELEVANCE and UPDATED
-            }
-
-            val searchUrl = buildString {
-                append("https://$domain$listUrl")
-                if (page > 1) {
-                    append("page/$page/")
-                }
-                // Use 's' for the search query, which is standard for WordPress
-                append("?s=${filter.query.urlEncoded()}")
-                append("&the_type=comic%2Cmanga%2Cmanhua%2Cmanhwa") // Filter out novels as requested
-                append("&the_orderby=$orderByParam")
-            }
-
-            val document = webClient.httpGet(searchUrl).parseHtml()
-            return parseMangaList(document)
+            return performAjaxSearch(filter.query)
         }
 
-        // For non-search requests, use the default implementation from the parent class
-        return super.getListPage(page, order, filter)
+        val url = buildString {
+            append("https://$domain/manga/")
+
+            // Add pagination if page > 1
+            if (page > 1) {
+                append("page/$page/")
+            }
+
+            append("?")
+
+            // Always add content type filter to exclude novels
+            append("the_type=comic%2Cmanga%2Cmanhua%2Cmanhwa")
+
+            // Add tags/genres
+            if (filter.tags.isNotEmpty()) {
+                val genreString = filter.tags.joinToString(",") { it.key }
+                append("&the_genre=$genreString")
+            }
+
+            // Add status filter if available (would need to be added to filter capabilities)
+            // This could be extended later: &the_status=completed, ongoing, etc.
+        }
+
+        val doc = webClient.httpGet(url).parseHtml()
+        return parseMangaList(doc)
+    }
+
+    private suspend fun performAjaxSearch(query: String): List<Manga> {
+        try {
+            // First, get nonce from main page
+            val mainPage = webClient.httpGet("https://$domain/").parseHtml()
+            val pageHtml = mainPage.html()
+
+            // Try multiple ways to extract nonce
+            val nonce = Regex("nonce[\"']\\s*:\\s*[\"']([^\"']+)[\"']").find(pageHtml)?.groupValues?.get(1)
+                ?: Regex("nonce=([a-f0-9]+)").find(pageHtml)?.groupValues?.get(1)
+                ?: "eadaed75c9" // Fallback from intercepted request
+
+            // Make AJAX search request with HTMX headers
+            val searchUrl = "https://$domain/wp-admin/admin-ajax.php?nonce=$nonce&action=search"
+
+            // Add required HTMX headers for search to work
+            val extraHeaders = headersOf(
+                "Hx-Request", "true",
+                "Hx-Trigger-Name", "query",
+                "Hx-Target", "searchModalContent",
+                "Hx-Current-Url", "https://$domain/",
+                "Content-Type", "application/x-www-form-urlencoded"
+            )
+
+            // Send raw body as "query=search_term" - matches intercepted format exactly
+            val requestBody = "query=$query"
+            val response = webClient.httpPost(searchUrl.toHttpUrl(), requestBody, extraHeaders)
+
+            val searchResults = response.parseHtml()
+
+            // Parse AJAX response - match the exact structure from intercepted response
+            return searchResults.select("a[href*='/manga/']").filter { a ->
+                // Skip the "Show more" link
+                !a.text().contains("Show more") && a.selectFirst("h3") != null
+            }.mapNotNull { a ->
+                val url = a.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
+                if (!url.contains("/manga/")) return@mapNotNull null
+
+                val title = a.selectFirst("h3")?.text()?.trim() ?: return@mapNotNull null
+                val img = a.selectFirst("img")
+                val coverUrl = img?.attr("src")?.takeIf { it.isNotBlank() }
+
+                Manga(
+                    id = generateUid(url),
+                    url = url,
+                    title = title,
+                    altTitles = emptySet(),
+                    publicUrl = a.attrAsAbsoluteUrl("href"),
+                    rating = RATING_UNKNOWN,
+                    contentRating = if (isNsfwSource) ContentRating.ADULT else null,
+                    coverUrl = coverUrl,
+                    tags = emptySet(),
+                    state = null,
+                    authors = emptySet(),
+                    source = source,
+                )
+            }
+        } catch (e: Exception) {
+            // Fallback to empty list if AJAX search fails
+            return emptyList()
+        }
     }
 
     // Override parsing for new Kiryuu structure with multiple fallback approaches

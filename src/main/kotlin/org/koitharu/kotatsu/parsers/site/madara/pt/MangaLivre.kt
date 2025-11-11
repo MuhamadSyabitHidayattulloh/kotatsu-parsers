@@ -53,95 +53,105 @@ internal class MangaLivre(context: MangaLoaderContext) :
 		}
 	}
 
-	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
-		println("DEBUG: MangaLivre.getListPage called with page=$page")
+    override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
+        println("DEBUG: MangaLivre.getListPage called with page=$page")
 
-		val pages = page + 1
+        val pages = page + 1
 
-		val url = buildString {
-			append("https://")
-			append(domain)
+        val url = buildString {
+            append("https://")
+            append(domain)
 
-			if (pages > 1) {
-				append("/page/")
-				append(pages.toString())
-			}
-			append("/?s=")
+            if (pages > 1) {
+                append("/page/")
+                append(pages.toString())
+            }
+            append("/?s=")
 
-			filter.query?.let {
-				append(filter.query.urlEncoded())
-			}
+            filter.query?.let {
+                append(filter.query.urlEncoded())
+            }
 
-			append("&post_type=wp-manga")
+            append("&post_type=wp-manga")
 
-			if (filter.tags.isNotEmpty()) {
-				filter.tags.forEach {
-					append("&genre[]=")
-					append(it.key)
-				}
-			}
+            if (filter.tags.isNotEmpty()) {
+                filter.tags.forEach {
+                    append("&genre[]=")
+                    append(it.key)
+                }
+            }
 
-			filter.states.forEach {
-				append("&status[]=")
-				when (it) {
-					MangaState.ONGOING -> append("on-going")
-					MangaState.FINISHED -> append("end")
-					MangaState.ABANDONED -> append("canceled")
-					MangaState.PAUSED -> append("on-hold")
-					MangaState.UPCOMING -> append("upcoming")
-					else -> throw IllegalArgumentException("$it not supported")
-				}
-			}
+            filter.states.forEach {
+                append("&status[]=")
+                when (it) {
+                    MangaState.ONGOING -> append("on-going")
+                    MangaState.FINISHED -> append("end")
+                    MangaState.ABANDONED -> append("canceled")
+                    MangaState.PAUSED -> append("on-hold")
+                    MangaState.UPCOMING -> append("upcoming")
+                    else -> throw IllegalArgumentException("$it not supported")
+                }
+            }
 
-			filter.contentRating.oneOrThrowIfMany()?.let {
-				append("&adult=")
-				append(
-					when (it) {
-						ContentRating.SAFE -> "0"
-						ContentRating.ADULT -> "1"
-						else -> ""
-					},
-				)
-			}
+            filter.contentRating.oneOrThrowIfMany()?.let {
+                append("&adult=")
+                append(
+                    when (it) {
+                        ContentRating.SAFE -> "0"
+                        ContentRating.ADULT -> "1"
+                        else -> ""
+                    },
+                )
+            }
 
-			if (filter.year != 0) {
-				append("&release=")
-				append(filter.year.toString())
-			}
+            if (filter.year != 0) {
+                append("&release=")
+                append(filter.year.toString())
+            }
 
-			append("&m_orderby=")
-			when (order) {
-				SortOrder.POPULARITY -> append("views")
-				SortOrder.UPDATED -> append("latest")
-				SortOrder.NEWEST -> append("new-manga")
-				SortOrder.ALPHABETICAL -> append("alphabet")
-				SortOrder.RATING -> append("rating")
-				SortOrder.RELEVANCE -> {}
-				else -> {}
-			}
-		}
+            append("&m_orderby=")
+            when (order) {
+                SortOrder.POPULARITY -> append("views")
+                SortOrder.UPDATED -> append("latest")
+                SortOrder.NEWEST -> append("new-manga")
+                SortOrder.ALPHABETICAL -> append("alphabet")
+                SortOrder.RATING -> append("rating")
+                SortOrder.RELEVANCE -> {}
+                else -> {}
+            }
+        }
 
-		// Use webview for Cloudflare bypass
-		println("DEBUG: Loading URL via webview: $url")
-		val requests = context.interceptWebViewRequests(
-			url = url,
-			interceptorScript = "return true;", // Intercept all requests
-			timeout = 15000L
-		)
+        println("DEBUG: Loading URL via webview: $url")
+        val requests = context.interceptWebViewRequests(
+            url = url,
+            interceptorScript = "post_type=wp-manga",
+            timeout = 15000L // 30 seconds
+        )
 
-		if (requests.isNotEmpty()) {
-			val response = requests.first()
-			println("DEBUG: Intercepted response (length=${response.body?.length})")
-			val html = response.body.toString()
-			println("DEBUG: First 200 chars: ${html.take(200)}")
-			val doc = Jsoup.parse(html, url)
-			return parseMangaList(doc)
-		} else {
-			println("ERROR: No requests intercepted")
-			throw ParseException("Failed to intercept webview requests", url)
-		}
-	}
+        // Check if we specifically intercepted the main document.
+        val mainDocumentRequest = requests.firstOrNull { it.url.contains("post_type=wp-manga") }
 
+        if (mainDocumentRequest != null) {
+            // The body might be null if the request failed, so handle that case.
+            val html = mainDocumentRequest.body?.toString()
+            if (html.isNullOrBlank()) {
+                println("ERROR: Intercepted request but the body was empty.")
+                throw ParseException("Intercepted request for main document had an empty body", url)
+            }
+
+            println("DEBUG: Intercepted response for ${mainDocumentRequest.url} (length=${html.length})")
+            val doc = Jsoup.parse(html, url)
+            return parseMangaList(doc)
+        } else {
+            println("ERROR: No requests were intercepted that matched the filter.")
+            // You can add this for better debugging if it still fails:
+            if (requests.isNotEmpty()) {
+                println("DEBUG: Intercepted other requests, but not the main document. URLs found:")
+                requests.forEach { println(" - ${it.url}") }
+            }
+            throw ParseException("Failed to intercept the main webview request", url)
+        }
+    }
 	override suspend fun getDetails(manga: Manga): Manga {
 		println("DEBUG: MangaLivre.getDetails called for: ${manga.title}")
 

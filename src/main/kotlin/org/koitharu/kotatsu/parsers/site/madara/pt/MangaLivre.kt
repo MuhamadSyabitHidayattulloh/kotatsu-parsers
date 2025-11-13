@@ -1,7 +1,5 @@
 package org.koitharu.kotatsu.parsers.site.madara.pt
 
-import kotlinx.coroutines.delay
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
@@ -66,34 +64,21 @@ internal class MangaLivre(context: MangaLoaderContext) :
 
         println("DEBUG: captureDocument resolved URL: $finalUrl (from ${capturedUrls.size} captures)")
 
-        repeat(3) { attempt ->
-            val html = context.evaluateJs(finalUrl, "document.documentElement.outerHTML")
-            if (!html.isNullOrBlank()) {
-                val suspicious = html.length < 200 || html.contains("cf-browser-verification") ||
-                    html.contains("Checking if the site connection is secure", ignoreCase = true) ||
-                    html.contains("cf-chl-", ignoreCase = true)
-                if (!suspicious) {
-                    println("DEBUG: captureDocument obtained HTML on attempt ${attempt + 1} (length=${html.length})")
-                    return Jsoup.parse(html, finalUrl)
-                }
-                println("WARN: captureDocument HTML attempt ${attempt + 1} looks like Cloudflare challenge (length=${html.length})")
-            } else {
-                println("WARN: captureDocument got empty HTML on attempt ${attempt + 1} for $finalUrl")
-            }
-            delay(250)
-        }
+        val response = runCatching {
+            // Allow recently set cookies to propagate before the HTTP request
+            webClient.httpGet(finalUrl)
+        }.getOrNull()
 
-        println("WARN: captureDocument falling back to HTTP fetch for $finalUrl")
-        val response = runCatching { webClient.httpGet(finalUrl) }.getOrNull()
         if (response != null) {
-            response.use { res ->
-                val protection = CloudFlareHelper.checkResponseForProtection(res.copy())
-                if (protection == CloudFlareHelper.PROTECTION_NOT_DETECTED) {
-                    println("DEBUG: captureDocument succeeded via HTTP fallback for $finalUrl")
-                    return res.parseHtml()
-                }
-                println("WARN: Cloudflare protection detected ($protection) while fetching $finalUrl")
+            val protection = CloudFlareHelper.checkResponseForProtection(response.copy())
+            if (protection == CloudFlareHelper.PROTECTION_NOT_DETECTED) {
+                println("DEBUG: captureDocument succeeded via HTTP fetch for $finalUrl")
+                return response.parseHtml()
             }
+            response.close()
+            println("WARN: Cloudflare protection detected ($protection) while fetching $finalUrl")
+        } else {
+            println("WARN: HTTP request for $finalUrl failed, trying browser action if allowed")
         }
 
         if (allowBrowserAction) {

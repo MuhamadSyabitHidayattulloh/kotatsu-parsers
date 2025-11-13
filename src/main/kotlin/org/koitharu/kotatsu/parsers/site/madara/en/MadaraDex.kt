@@ -1,6 +1,5 @@
 package org.koitharu.kotatsu.parsers.site.madara.en
 
-import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
@@ -12,8 +11,6 @@ import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.koitharu.kotatsu.parsers.network.UserAgents
 import org.koitharu.kotatsu.parsers.site.madara.MadaraParser
 import org.koitharu.kotatsu.parsers.util.*
-
-private const val F_URL = "fullUrl="
 
 @MangaSourceParser("MADARADEX", "MadaraDex", "en", ContentType.HENTAI)
 internal class MadaraDex(context: MangaLoaderContext) :
@@ -63,18 +60,15 @@ internal class MadaraDex(context: MangaLoaderContext) :
 
         return root.select(selectPage).flatMap { div ->
             div.selectOrThrow("img").map { img ->
-                val fragUrl = img.requireSrc().toRelativeUrl(domain).toHttpUrl().newBuilder()
-                    .fragment(F_URL + fullUrl)
-                    .build()
-                val cleanUrl = fragUrl.newBuilder().fragment(null).build()
+                val rawUrl = img.requireSrc().toRelativeUrl(domain)
+                val cleanUrl = rawUrl.substringBefore('#')
                 MangaPage(
-                    id = generateUid(cleanUrl.toString()),
-                    url = fragUrl.toString(),
+                    id = generateUid(cleanUrl),
+                    url = cleanUrl,
                     preview = null,
                     source = source,
                 )
             }
         }
     }
-
 }

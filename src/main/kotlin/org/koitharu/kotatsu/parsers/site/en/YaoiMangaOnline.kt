@@ -270,16 +270,34 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 	private suspend fun loadDocumentViaWebView(url: String): Document? {
 		val script = """
 			(() => {
+				const hasContent = () => {
+					if (!document.documentElement) {
+						return false;
+					}
+					const html = document.documentElement.outerHTML.toLowerCase();
+					if (html.includes("cf-browser-verification") || html.includes("verify you are human") || html.includes("just a moment")) {
+						return true;
+					}
+					return document.querySelectorAll("article").length > 0 || document.querySelector("nav.mpp-toc") !== null;
+				};
 				return new Promise(resolve => {
 					const finish = () => {
 						resolve(document.documentElement ? document.documentElement.outerHTML : "");
 					};
+					const waitForContent = (start) => {
+						if (hasContent() || Date.now() - start > 3500) {
+							finish();
+						} else {
+							setTimeout(() => waitForContent(start), 150);
+						}
+					};
 					if (document.readyState === "complete") {
-						setTimeout(finish, 200);
+						waitForContent(Date.now());
 					} else {
-						window.addEventListener("load", () => setTimeout(finish, 200), { once: true });
+						window.addEventListener("load", () => waitForContent(Date.now()), { once: true });
+						setTimeout(() => waitForContent(Date.now()), 2000);
 					}
-					setTimeout(finish, 3000);
+					setTimeout(finish, 5000);
 				});
 			})();
 		""".trimIndent()
@@ -300,7 +318,9 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 		return bodyHtml.contains("cf-browser-verification") ||
 			bodyHtml.contains("checking if the site connection is secure") ||
 			bodyHtml.contains("cf-chl") ||
-			bodyHtml.contains("cf-turnstile")
+			bodyHtml.contains("cf-turnstile") ||
+			bodyHtml.contains("verify you are human") ||
+			bodyHtml.contains("cloudflare");
 	}
 
 	private fun Element.resolveImageUrl(): String? {

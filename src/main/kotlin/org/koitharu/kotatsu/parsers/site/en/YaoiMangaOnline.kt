@@ -20,6 +20,7 @@ import org.koitharu.kotatsu.parsers.model.MangaTag
 import org.koitharu.kotatsu.parsers.model.SortOrder
 import org.koitharu.kotatsu.parsers.model.RATING_UNKNOWN
 import org.koitharu.kotatsu.parsers.model.ContentRating
+import org.koitharu.kotatsu.parsers.network.CloudFlareHelper
 import org.koitharu.kotatsu.parsers.util.*
 import org.koitharu.kotatsu.parsers.util.suspendlazy.suspendLazy
 import java.text.SimpleDateFormat
@@ -105,7 +106,19 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 			}
 		}
 
-		val document = fetchDocument(fullUrl, preferWebView = isSearch)
+		val preferredMatch = when {
+			isSearch -> Regex(
+				"^https?://${Regex.escape(domain)}/.*[?&]s=.*$",
+				RegexOption.IGNORE_CASE,
+			)
+			tagFilter != null -> buildPathPattern("tag/${tagFilter.key}")
+			else -> buildPathPattern(listPath)
+		}
+		val document = fetchDocument(
+			fullUrl,
+			preferWebView = isSearch,
+			preferredMatch = preferredMatch,
+		)
 		return document.select("article").mapNotNull { article ->
 			val titleAnchor = article.selectFirst("h2.entry-title a") ?: return@mapNotNull null
 			val rawHref = titleAnchor.attrAsRelativeUrlOrNull("href")
@@ -135,7 +148,10 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 
 	override suspend fun getDetails(manga: Manga): Manga {
 		val detailUrl = manga.url.toAbsoluteUrl(domain)
-		val doc = fetchDocument(detailUrl)
+		val doc = fetchDocument(
+			detailUrl,
+			preferredMatch = buildPathPattern(manga.url),
+		)
 		val description = doc.select("div.entry-content > p").joinToString(separator = "\n\n") { it.text() }
 			.nullIfEmpty()
 		val tagSet = doc.select("a[rel='tag'], a[rel='category tag']").mapNotNullToSet { anchor ->
@@ -218,7 +234,10 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 	}
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-		val chapterDoc = fetchDocument(chapter.url.toAbsoluteUrl(domain))
+		val chapterDoc = fetchDocument(
+			chapter.url.toAbsoluteUrl(domain),
+			preferredMatch = buildPathPattern(chapter.url),
+		)
 		val contentRoot = chapterDoc.selectFirst("div.entry-content") ?: chapterDoc.body()
 		val seen = HashSet<String>()
 		return contentRoot.select("img").mapNotNull { img ->
@@ -238,39 +257,102 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 		}
 	}
 
-	private suspend fun fetchDocument(url: String, preferWebView: Boolean = false): Document {
-		if (preferWebView) {
-			loadDocumentViaWebView(url)?.let { doc ->
-				if (!doc.isCloudflareChallenge()) {
-					return doc
-				}
-			}
-			context.requestBrowserAction(this, url)
-			loadDocumentViaWebView(url)?.let { doc ->
-				if (!doc.isCloudflareChallenge()) {
-					return doc
-				}
-			}
-			throw ParseException(cloudflareMessage, url)
-		}
+	private val captureAllPattern = Regex(".*")
 
-		fetchHttpDocument(url)?.let { doc ->
-			if (!doc.isCloudflareChallenge()) {
-				return doc
-			}
+	private fun buildPathPattern(path: String): Regex {
+		val sanitized = path
+			.removePrefix("https://${domain}")
+			.removePrefix("http://${domain}")
+			.removePrefix("/")
+			.substringBefore("?")
+			.removeSuffix("/")
+		if (sanitized.isEmpty()) {
+			return Regex("^https?://${Regex.escape(domain)}(?:/.*)?$", RegexOption.IGNORE_CASE)
 		}
-		context.requestBrowserAction(this, url)
-		fetchHttpDocument(url)?.let { doc ->
-			if (!doc.isCloudflareChallenge()) {
-				return doc
-			}
-		}
-		throw ParseException(cloudflareMessage, url)
+		return Regex(
+			"^https?://${Regex.escape(domain)}/${Regex.escape(sanitized)}(?:[/?].*)?$",
+			RegexOption.IGNORE_CASE,
+		)
 	}
 
-	private suspend fun fetchHttpDocument(url: String): Document? {
-		val response = runCatching { webClient.httpGet(url) }.getOrElse { return null }
-		return response.use { res -> runCatching { res.parseHtml() }.getOrNull() }
+	private suspend fun fetchDocument(
+		url: String,
+		preferWebView: Boolean = false,
+		preferredMatch: Regex? = null,
+	): Document {
+		return captureDocument(url, preferredMatch, preferWebViewFirst = preferWebView)
+	}
+
+	private suspend fun captureDocument(
+		initialUrl: String,
+		preferredMatch: Regex? = null,
+		preferWebViewFirst: Boolean = false,
+		timeoutMs: Long = 15000L,
+		allowBrowserAction: Boolean = true,
+	): Document {
+		if (!preferWebViewFirst) {
+			tryHttpDocument(initialUrl)?.let { doc ->
+				return doc
+			}
+		}
+
+		val capturedUrls = try {
+			context.captureWebViewUrls(
+				pageUrl = initialUrl,
+				urlPattern = captureAllPattern,
+				timeout = timeoutMs,
+			)
+		} catch (e: Exception) {
+			throw ParseException(cloudflareMessage, initialUrl, e)
+		}
+
+		if (capturedUrls.isEmpty()) {
+			throw ParseException(cloudflareMessage, initialUrl)
+		}
+
+		val resolvedUrl = preferredMatch?.let { regex ->
+			capturedUrls.firstOrNull { url -> regex.containsMatchIn(url) }
+		} ?: capturedUrls.firstOrNull { url ->
+			url.startsWith("https://$domain") || url.startsWith("http://$domain")
+		} ?: capturedUrls.first()
+
+		val finalUrl = resolvedUrl ?: initialUrl
+
+		tryHttpDocument(finalUrl)?.let { doc ->
+			return doc
+		}
+
+		loadDocumentViaWebView(finalUrl)?.let { doc ->
+			return doc
+		}
+
+		if (allowBrowserAction) {
+			context.requestBrowserAction(this, finalUrl)
+			return captureDocument(
+				initialUrl = initialUrl,
+				preferredMatch = preferredMatch,
+				preferWebViewFirst = preferWebViewFirst,
+				timeoutMs = timeoutMs,
+				allowBrowserAction = false,
+			)
+		}
+
+		throw ParseException(cloudflareMessage, finalUrl)
+	}
+
+	private suspend fun tryHttpDocument(url: String): Document? {
+		val response = runCatching { webClient.httpGet(url) }.getOrNull() ?: return null
+		return response.use { res ->
+			val protection = CloudFlareHelper.checkResponseForProtection(res.copy())
+			if (protection != CloudFlareHelper.PROTECTION_NOT_DETECTED) {
+				return null
+			}
+			val doc = runCatching { res.parseHtml() }.getOrNull() ?: return null
+			if (doc.isCloudflareChallenge()) {
+				return null
+			}
+			doc
+		}
 	}
 
 	private suspend fun loadDocumentViaWebView(url: String): Document? {
@@ -309,10 +391,24 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 		""".trimIndent()
 
 		val html = context.evaluateJs(url, script) ?: return null
-		if (html.isBlank()) {
+		if (html.isBlank() || isCloudflareHtml(html)) {
 			return null
 		}
-		return Jsoup.parse(html, url)
+		val doc = Jsoup.parse(html, url)
+		return doc.takeUnless { it.isCloudflareChallenge() }
+	}
+
+	private fun isCloudflareHtml(html: String): Boolean {
+		if (html.length < 200) {
+			return true
+		}
+		val lower = html.lowercase(Locale.US)
+		return lower.contains("cf-browser-verification") ||
+			lower.contains("checking if the site connection is secure") ||
+			lower.contains("checking your browser before accessing") ||
+			lower.contains("cf-chl") ||
+			lower.contains("cf-turnstile") ||
+			(lower.contains("cloudflare") && lower.contains("captcha"))
 	}
 
 	private fun Document.isCloudflareChallenge(): Boolean {
@@ -336,7 +432,10 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 	}
 
 	private suspend fun fetchTags(): Set<MangaTag> {
-		val doc = webClient.httpGet("https://$domain/").parseHtml()
+		val doc = fetchDocument(
+			url = "https://$domain/",
+			preferredMatch = buildPathPattern("/"),
+		)
 		return doc.select("div.tagcloud a").mapNotNullToSet { anchor ->
 			val text = anchor.text().nullIfEmpty() ?: return@mapNotNullToSet null
 			val href = anchor.attrOrNull("href")?.trimEnd('/') ?: return@mapNotNullToSet null

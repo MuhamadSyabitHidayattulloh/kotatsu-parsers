@@ -1,8 +1,6 @@
 package org.koitharu.kotatsu.parsers.site.madara.en
 
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Interceptor
-import okhttp3.Response
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
@@ -49,6 +47,13 @@ internal class MadaraDex(context: MangaLoaderContext) :
 
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
         val fullUrl = chapter.url.toAbsoluteUrl(domain)
+
+        // Warm up Cloudflare by visiting the chapter in a WebView session before fetching images.
+        context.webViewSession.navigate(fullUrl)
+
+        // Close the WebView session after the warm-up completes.
+        context.webViewSession.close()
+
         val doc = webClient.httpGet(fullUrl).parseHtml()
         val root = doc.body().selectFirst(selectBodyPage)
             ?: throw ParseException("No image found, try to log in", fullUrl)
@@ -69,30 +74,4 @@ internal class MadaraDex(context: MangaLoaderContext) :
         }
     }
 
-    override fun intercept(chain: Interceptor.Chain): Response {
-        val request = chain.request()
-        val url = request.url
-        val cleanUrl = url.newBuilder().fragment(null).build()
-        val fullUrl = url.fragment?.substringAfter(F_URL, "")
-        val host = url.host.orEmpty()
-
-        return if (host.equals("cdn.madaradex.org", ignoreCase = true) || !fullUrl.isNullOrEmpty()) {
-            copyCookies()
-            val referer = if (!fullUrl.isNullOrEmpty()) {
-                fullUrl
-            } else {
-                "https://${domain}/"
-            }
-            val newReq = request.newBuilder()
-                .header("Referer", referer)
-                .header("Origin", "https://${domain}")
-                .url(cleanUrl)
-                .build()
-            chain.proceed(newReq)
-        } else {
-            super.intercept(chain)
-        }
-    }
-
-    private fun copyCookies() = context.cookieJar.copyCookies(domain, "cdn.$domain")
 }

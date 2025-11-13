@@ -48,11 +48,14 @@ internal class MadaraDex(context: MangaLoaderContext) :
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
         val fullUrl = chapter.url.toAbsoluteUrl(domain)
 
-        // Warm up Cloudflare by visiting the chapter in a WebView session before fetching images.
-        context.webViewSession.navigate(fullUrl)
-
-        // Close the WebView session after the warm-up completes.
-        context.webViewSession.close()
+        // Warm up Cloudflare by driving a lightweight WebView visit before fetching images.
+        runCatching {
+            context.captureWebViewUrls(
+                pageUrl = fullUrl,
+                urlPattern = Regex("https?://cdn\\.madaradex\\.org/.*", RegexOption.IGNORE_CASE),
+                timeout = 4000L,
+            )
+        }.getOrNull()
 
         val doc = webClient.httpGet(fullUrl).parseHtml()
         val root = doc.body().selectFirst(selectBodyPage)

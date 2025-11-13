@@ -37,6 +37,10 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 
 	private val detailDateFormat = SimpleDateFormat("MMMM d, yyyy", Locale.US)
 
+	private val chapterNumberRegex = Regex("""(\d+(?:\.\d+)?)""")
+
+	private val cloudflareMessage = "Cloudflare verification is required. Open the source in the in-app browser, complete the check, then try again."
+
 	override val availableSortOrders: Set<SortOrder> = EnumSet.of(SortOrder.RELEVANCE)
 
 	override val filterCapabilities: MangaListFilterCapabilities
@@ -96,7 +100,7 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 		}
 
 		val document = fetchDocument(fullUrl, preferWebView = isSearch)
-		return document.select("article.herald-lay-i").mapNotNull { article ->
+		return document.select("article").mapNotNull { article ->
 			val titleAnchor = article.selectFirst("h2.entry-title a") ?: return@mapNotNull null
 			val rawHref = titleAnchor.attrAsRelativeUrlOrNull("href")
 				?: titleAnchor.attr("href").toRelativeUrl(domain)
@@ -144,22 +148,43 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 
 		val chapterElements = doc.select("nav.mpp-toc ul li a")
 		val chapters = if (chapterElements.isNotEmpty()) {
-			val total = chapterElements.size
-			chapterElements.mapIndexed { index, anchor ->
+			data class ChapterCandidate(
+				val index: Int,
+				val href: String,
+				val title: String,
+				val number: Float?,
+			)
+
+			val candidates = chapterElements.mapIndexedNotNull { index, anchor ->
 				val href = anchor.attrAsRelativeUrlOrNull("href")
 					?: anchor.attr("href").toRelativeUrl(domain)
+				val rawTitle = anchor.text().nullIfEmpty() ?: anchor.attrOrNull("title")?.nullIfEmpty()
+					?: "Chapter ${index + 1}"
+				val number = chapterNumberRegex.find(rawTitle)?.value?.toFloatOrNull()
+				ChapterCandidate(
+					index = index,
+					href = href,
+					title = rawTitle,
+					number = number,
+				)
+			}
+			val sorted = candidates.sortedWith(
+				compareBy<ChapterCandidate> { it.number ?: (it.index + 1).toFloat() }
+					.thenBy { it.index },
+			)
+			sorted.mapIndexed { mappedIndex, candidate ->
 				MangaChapter(
-					id = generateUid(href),
-					url = href,
-					title = anchor.text().ifEmpty { "Chapter ${total - index}" },
-					number = (total - index).toFloat(),
+					id = generateUid(candidate.href),
+					url = candidate.href,
+					title = candidate.title,
+					number = candidate.number ?: (mappedIndex + 1).toFloat(),
 					uploadDate = 0L,
 					volume = 0,
 					branch = null,
 					scanlator = null,
 					source = source,
 				)
-			}.reversed()
+			}
 		} else {
 			val uploadDate = doc.selectFirst("div.entry-meta span.updated")?.text()
 				?.let { detailDateFormat.parseSafe(it) }
@@ -214,33 +239,32 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 					return doc
 				}
 			}
-		}
-
-		val httpDoc = webClient.httpGet(url).parseHtml()
-		if (!preferWebView) {
-			if (httpDoc.isCloudflareChallenge()) {
-				throw ParseException(
-					"Cloudflare verification is required. Open the source in the in-app browser, complete the check, then try again.",
-					url,
-				)
+			context.requestBrowserAction(this, url)
+			loadDocumentViaWebView(url)?.let { doc ->
+				if (!doc.isCloudflareChallenge()) {
+					return doc
+				}
 			}
-			return httpDoc
+			throw ParseException(cloudflareMessage, url)
 		}
 
-		if (!httpDoc.isCloudflareChallenge()) {
-			return httpDoc
-		}
-
-		loadDocumentViaWebView(url)?.let { doc ->
+		fetchHttpDocument(url)?.let { doc ->
 			if (!doc.isCloudflareChallenge()) {
 				return doc
 			}
 		}
+		context.requestBrowserAction(this, url)
+		fetchHttpDocument(url)?.let { doc ->
+			if (!doc.isCloudflareChallenge()) {
+				return doc
+			}
+		}
+		throw ParseException(cloudflareMessage, url)
+	}
 
-		throw ParseException(
-			"Cloudflare verification is required. Open the source in the in-app browser, complete the check, then try again.",
-			url,
-		)
+	private suspend fun fetchHttpDocument(url: String): Document? {
+		val response = runCatching { webClient.httpGet(url) }.getOrElse { return null }
+		return response.use { res -> runCatching { res.parseHtml() }.getOrNull() }
 	}
 
 	private suspend fun loadDocumentViaWebView(url: String): Document? {

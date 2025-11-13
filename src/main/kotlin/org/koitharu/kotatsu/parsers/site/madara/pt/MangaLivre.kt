@@ -150,7 +150,10 @@ internal class MangaLivre(context: MangaLoaderContext) :
             lower.contains("checking your browser before accessing") ||
             lower.contains("cf-chl") ||
             lower.contains("cf-turnstile") ||
-            (lower.contains("cloudflare") && lower.contains("captcha"))
+            lower.contains("cdn-cgi/challenge-platform") ||
+            lower.contains("challenges.cloudflare.com") ||
+            (lower.contains("cloudflare") && lower.contains("captcha")) ||
+            (lower.contains("just a moment") && lower.contains("cloudflare"))
     }
 
     // Override fetchAvailableTags to also use webview

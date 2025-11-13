@@ -60,7 +60,7 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 		filter: MangaListFilter,
 	): List<Manga> {
 		val isSearch = !filter.query.isNullOrEmpty()
-		val tagFilter = filter.tags.firstOrNull()
+		val tagFilter = filter.tags.firstOrNull { it.source == source }
 		val fullUrl = if (isSearch) {
 			buildString {
 				append("https://")

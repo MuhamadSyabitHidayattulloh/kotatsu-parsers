@@ -27,7 +27,7 @@ import java.util.EnumSet
 import java.util.HashSet
 import java.util.Locale
 
-@MangaSourceParser("YaoiMangaOnline", "YaoiMangaOnline", "en", ContentType.HENTAI)
+@MangaSourceParser("YAOIMANGAONLINE", "YaoiMangaOnline", "en", ContentType.HENTAI)
 internal class YaoiMangaOnline(context: MangaLoaderContext) :
 	PagedMangaParser(context, MangaParserSource.YAOIMANGAONLINE, 12) {
 
@@ -151,7 +151,6 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 				MangaChapter(
 					id = generateUid(href),
 					url = href,
-					publicUrl = href.toAbsoluteUrl(domain),
 					title = anchor.text().ifEmpty { "Chapter ${total - index}" },
 					number = (total - index).toFloat(),
 					uploadDate = 0L,
@@ -163,13 +162,12 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 			}.reversed()
 		} else {
 			val uploadDate = doc.selectFirst("div.entry-meta span.updated")?.text()
-				?.let { detailDateFormat.parseSafe(it)?.time }
+				?.let { detailDateFormat.parseSafe(it) }
 				?: 0L
 			listOf(
 				MangaChapter(
 					id = manga.id,
 					url = manga.url,
-					publicUrl = detailUrl,
 					title = "Oneshot",
 					number = 1f,
 					uploadDate = uploadDate,

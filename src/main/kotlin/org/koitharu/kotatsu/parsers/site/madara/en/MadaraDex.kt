@@ -78,8 +78,14 @@ internal class MadaraDex(context: MangaLoaderContext) :
 
         return if (host.equals("cdn.madaradex.org", ignoreCase = true) || !fullUrl.isNullOrEmpty()) {
             copyCookies()
+            val referer = if (!fullUrl.isNullOrEmpty()) {
+                fullUrl
+            } else {
+                "https://${domain}/"
+            }
             val newReq = request.newBuilder()
-                .header("Referer", "https://${domain}/")
+                .header("Referer", referer)
+                .header("Origin", "https://${domain}")
                 .url(cleanUrl)
                 .build()
             chain.proceed(newReq)

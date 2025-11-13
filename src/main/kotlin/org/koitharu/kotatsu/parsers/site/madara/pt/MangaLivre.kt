@@ -15,6 +15,7 @@ internal class MangaLivre(context: MangaLoaderContext) :
     MadaraParser(context, MangaParserSource.MANGALIVRE, "mangalivre.tv") {
     override val datePattern = "MMMM dd, yyyy"
     override val withoutAjax = true
+    override val stylePage = ""
 
     private val captureAllPattern = Regex(".*")
 

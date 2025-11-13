@@ -97,7 +97,9 @@ internal class MangaLivre(context: MangaLoaderContext) :
                 println("WARN: Cloudflare protection detected ($protection) while fetching $url")
                 return null
             }
-            return res.parseHtml()
+            val doc = res.parseHtml()
+            println("DEBUG: tryHttpDocument parsed HTML length=${doc.outerHtml().length} for $url")
+            return doc
         }
     }
 
@@ -127,7 +129,9 @@ internal class MangaLivre(context: MangaLoaderContext) :
             println("WARN: evaluateJs returned potential Cloudflare challenge for $url")
             return null
         }
-        return Jsoup.parse(html, url)
+        val doc = Jsoup.parse(html, url)
+        println("DEBUG: loadDocumentViaWebView parsed HTML length=${doc.outerHtml().length} for $url")
+        return doc
     }
 
     private fun isCloudflareHtml(html: String): Boolean {

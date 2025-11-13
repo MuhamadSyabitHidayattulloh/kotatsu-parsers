@@ -43,6 +43,7 @@ internal class MadaraDex(context: MangaLoaderContext) :
     override val listUrl = "title/"
     override val tagPrefix = "genre/"
     override val postReq = true
+    override val stylePage = ""
 
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
         val fullUrl = chapter.url.toAbsoluteUrl(domain)

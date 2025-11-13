@@ -7,6 +7,7 @@ import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.exception.ParseException
 import org.koitharu.kotatsu.parsers.model.*
+import org.koitharu.kotatsu.parsers.network.CloudFlareHelper
 import org.koitharu.kotatsu.parsers.site.madara.MadaraParser
 import org.koitharu.kotatsu.parsers.util.*
 
@@ -31,6 +32,7 @@ internal class MangaLivre(context: MangaLoaderContext) :
         initialUrl: String,
         preferredMatch: Regex? = null,
         timeoutMs: Long = 15000L,
+        allowBrowserAction: Boolean = true,
     ): Document {
         println("DEBUG: captureDocument loading $initialUrl (pattern=${preferredMatch?.pattern ?: "*"})")
         val capturedUrls = try {
@@ -67,11 +69,37 @@ internal class MangaLivre(context: MangaLoaderContext) :
         repeat(3) { attempt ->
             val html = context.evaluateJs(finalUrl, "document.documentElement.outerHTML")
             if (!html.isNullOrBlank()) {
-                println("DEBUG: captureDocument obtained HTML on attempt ${attempt + 1} (length=${html.length})")
-                return Jsoup.parse(html, finalUrl)
+                val suspicious = html.length < 200 || html.contains("cf-browser-verification") ||
+                    html.contains("Checking if the site connection is secure", ignoreCase = true) ||
+                    html.contains("cf-chl-", ignoreCase = true)
+                if (!suspicious) {
+                    println("DEBUG: captureDocument obtained HTML on attempt ${attempt + 1} (length=${html.length})")
+                    return Jsoup.parse(html, finalUrl)
+                }
+                println("WARN: captureDocument HTML attempt ${attempt + 1} looks like Cloudflare challenge (length=${html.length})")
+            } else {
+                println("WARN: captureDocument got empty HTML on attempt ${attempt + 1} for $finalUrl")
             }
-            println("WARN: captureDocument got empty HTML on attempt ${attempt + 1} for $finalUrl")
             delay(250)
+        }
+
+        println("WARN: captureDocument falling back to HTTP fetch for $finalUrl")
+        val response = runCatching { webClient.httpGet(finalUrl) }.getOrNull()
+        if (response != null) {
+            response.use { res ->
+                val protection = CloudFlareHelper.checkResponseForProtection(res.copy())
+                if (protection == CloudFlareHelper.PROTECTION_NOT_DETECTED) {
+                    println("DEBUG: captureDocument succeeded via HTTP fallback for $finalUrl")
+                    return res.parseHtml()
+                }
+                println("WARN: Cloudflare protection detected ($protection) while fetching $finalUrl")
+            }
+        }
+
+        if (allowBrowserAction) {
+            println("INFO: Requesting browser action to solve Cloudflare for $finalUrl")
+            context.requestBrowserAction(this, finalUrl)
+            return captureDocument(initialUrl, preferredMatch, timeoutMs, allowBrowserAction = false)
         }
 
         throw ParseException("Failed to load page via webview", finalUrl)

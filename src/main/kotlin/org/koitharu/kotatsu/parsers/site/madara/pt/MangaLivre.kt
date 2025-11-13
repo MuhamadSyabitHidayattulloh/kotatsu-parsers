@@ -1,5 +1,6 @@
 package org.koitharu.kotatsu.parsers.site.madara.pt
 
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
@@ -32,6 +33,11 @@ internal class MangaLivre(context: MangaLoaderContext) :
         timeoutMs: Long = 15000L,
         allowBrowserAction: Boolean = true,
     ): Document {
+        tryHttpDocument(initialUrl)?.let { doc ->
+            println("DEBUG: captureDocument resolved via HTTP without WebView for $initialUrl")
+            return doc
+        }
+
         println("DEBUG: captureDocument loading $initialUrl (pattern=${preferredMatch?.pattern ?: "*"})")
         val capturedUrls = try {
             context.captureWebViewUrls(
@@ -64,21 +70,14 @@ internal class MangaLivre(context: MangaLoaderContext) :
 
         println("DEBUG: captureDocument resolved URL: $finalUrl (from ${capturedUrls.size} captures)")
 
-        val response = runCatching {
-            // Allow recently set cookies to propagate before the HTTP request
-            webClient.httpGet(finalUrl)
-        }.getOrNull()
+        tryHttpDocument(finalUrl)?.let { doc ->
+            println("DEBUG: captureDocument succeeded via HTTP fetch for $finalUrl")
+            return doc
+        }
 
-        if (response != null) {
-            val protection = CloudFlareHelper.checkResponseForProtection(response.copy())
-            if (protection == CloudFlareHelper.PROTECTION_NOT_DETECTED) {
-                println("DEBUG: captureDocument succeeded via HTTP fetch for $finalUrl")
-                return response.parseHtml()
-            }
-            response.close()
-            println("WARN: Cloudflare protection detected ($protection) while fetching $finalUrl")
-        } else {
-            println("WARN: HTTP request for $finalUrl failed, trying browser action if allowed")
+        loadDocumentViaWebView(finalUrl)?.let { doc ->
+            println("DEBUG: captureDocument obtained HTML via evaluateJs for $finalUrl")
+            return doc
         }
 
         if (allowBrowserAction) {
@@ -88,6 +87,57 @@ internal class MangaLivre(context: MangaLoaderContext) :
         }
 
         throw ParseException("Failed to load page via webview", finalUrl)
+    }
+
+    private suspend fun tryHttpDocument(url: String): Document? {
+        val response = runCatching { webClient.httpGet(url) }.getOrNull() ?: return null
+        response.use { res ->
+            val protection = CloudFlareHelper.checkResponseForProtection(res.copy())
+            if (protection != CloudFlareHelper.PROTECTION_NOT_DETECTED) {
+                println("WARN: Cloudflare protection detected ($protection) while fetching $url")
+                return null
+            }
+            return res.parseHtml()
+        }
+    }
+
+    private suspend fun loadDocumentViaWebView(url: String): Document? {
+        val script = """
+            (() => {
+                return new Promise(resolve => {
+                    const finish = () => {
+                        resolve(document.documentElement ? document.documentElement.outerHTML : "");
+                    };
+                    if (document.readyState === "complete") {
+                        setTimeout(finish, 200);
+                    } else {
+                        window.addEventListener("load", () => setTimeout(finish, 200), { once: true });
+                    }
+                    setTimeout(finish, 3000);
+                });
+            })();
+        """.trimIndent()
+
+        val html = context.evaluateJs(url, script) ?: return null
+        if (html.isBlank()) {
+            println("WARN: evaluateJs returned blank HTML for $url")
+            return null
+        }
+        if (isCloudflareHtml(html)) {
+            println("WARN: evaluateJs returned potential Cloudflare challenge for $url")
+            return null
+        }
+        return Jsoup.parse(html, url)
+    }
+
+    private fun isCloudflareHtml(html: String): Boolean {
+        if (html.length < 200) {
+            return true
+        }
+        val lower = html.lowercase()
+        return lower.contains("cf-browser-verification") ||
+            lower.contains("checking if the site connection is secure") ||
+            lower.contains("cf-chl")
     }
 
     // Override fetchAvailableTags to also use webview

@@ -1,5 +1,6 @@
 package org.koitharu.kotatsu.parsers.site.madara.pt
 
+import kotlinx.coroutines.delay
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
@@ -63,14 +64,17 @@ internal class MangaLivre(context: MangaLoaderContext) :
 
         println("DEBUG: captureDocument resolved URL: $finalUrl (from ${capturedUrls.size} captures)")
 
-        return runCatching {
-            webClient.httpGet(finalUrl).parseHtml()
-        }.getOrElse { throwable ->
-            println("WARN: httpGet for $finalUrl failed (${throwable.message}), falling back to WebView HTML")
+        repeat(3) { attempt ->
             val html = context.evaluateJs(finalUrl, "document.documentElement.outerHTML")
-                ?: throw ParseException("Failed to load page via webview", finalUrl, throwable)
-            Jsoup.parse(html, finalUrl)
+            if (!html.isNullOrBlank()) {
+                println("DEBUG: captureDocument obtained HTML on attempt ${attempt + 1} (length=${html.length})")
+                return Jsoup.parse(html, finalUrl)
+            }
+            println("WARN: captureDocument got empty HTML on attempt ${attempt + 1} for $finalUrl")
+            delay(250)
         }
+
+        throw ParseException("Failed to load page via webview", finalUrl)
     }
 
     // Override fetchAvailableTags to also use webview

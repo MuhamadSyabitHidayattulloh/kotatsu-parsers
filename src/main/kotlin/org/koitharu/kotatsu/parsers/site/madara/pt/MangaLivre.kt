@@ -249,6 +249,57 @@ internal class MangaLivre(context: MangaLoaderContext) :
         return parseMangaList(doc)
     }
 
+    override fun parseMangaList(doc: Document): List<Manga> {
+        val items = doc.select(".search-lists .manga__item, .page-content-listing .manga__item")
+            .ifEmpty { doc.select(".manga__item") }
+
+        if (items.isEmpty()) {
+            return super.parseMangaList(doc)
+        }
+
+        return items.mapNotNull { item ->
+            val link = item.selectFirst(".manga__thumb a[href], .post-title a[href], a[href]")
+                ?: return@mapNotNull null
+            val href = link.attrAsRelativeUrlOrNull("href") ?: link.attr("href")
+            if (href.isBlank()) {
+                return@mapNotNull null
+            }
+
+            val title = item.selectFirst(".post-title a")?.text()?.trim()?.takeUnless { it.isEmpty() }
+                ?: link.attr("title").trim().takeUnless { it.isEmpty() }
+                ?: link.text().trim().takeUnless { it.isEmpty() }
+
+            Manga(
+                id = generateUid(href),
+                url = href,
+                publicUrl = href.toAbsoluteUrl(domain),
+                coverUrl = item.selectFirst("img")?.src(),
+                title = title ?: href,
+                altTitles = emptySet(),
+                rating = RATING_UNKNOWN,
+                tags = item.select(".manga-genres a").mapNotNullToSet { a ->
+                    val slug = a.attr("href").removeSuffix('/').substringAfterLast('/')
+                    if (slug.isEmpty()) {
+                        return@mapNotNullToSet null
+                    }
+                    val tagTitle = a.text().trim()
+                    if (tagTitle.isEmpty()) {
+                        return@mapNotNullToSet null
+                    }
+                    MangaTag(
+                        key = slug,
+                        title = tagTitle.toTitleCase(),
+                        source = source,
+                    )
+                },
+                authors = emptySet(),
+                state = null,
+                source = source,
+                contentRating = if (isNsfwSource) ContentRating.ADULT else null,
+            )
+        }
+    }
+
     override suspend fun getDetails(manga: Manga): Manga {
         println("DEBUG: MangaLivre.getDetails called for: ${manga.title}")
 

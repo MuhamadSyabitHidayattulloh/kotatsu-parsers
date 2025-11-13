@@ -99,7 +99,12 @@ internal class MangaLivre(context: MangaLoaderContext) :
                 return null
             }
             val doc = res.parseHtml()
-            println("DEBUG: tryHttpDocument parsed HTML length=${doc.outerHtml().length} for $url")
+            val html = doc.outerHtml()
+            println("DEBUG: tryHttpDocument parsed HTML length=${html.length} for $url")
+            if (isCloudflareHtml(html)) {
+                println("WARN: tryHttpDocument detected Cloudflare challenge markup for $url")
+                return null
+            }
             return doc
         }
     }
@@ -142,7 +147,10 @@ internal class MangaLivre(context: MangaLoaderContext) :
         val lower = html.lowercase()
         return lower.contains("cf-browser-verification") ||
             lower.contains("checking if the site connection is secure") ||
-            lower.contains("cf-chl")
+            lower.contains("checking your browser before accessing") ||
+            lower.contains("cf-chl") ||
+            lower.contains("cf-turnstile") ||
+            (lower.contains("cloudflare") && lower.contains("captcha"))
     }
 
     // Override fetchAvailableTags to also use webview

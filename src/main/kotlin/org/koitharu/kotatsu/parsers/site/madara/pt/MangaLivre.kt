@@ -309,6 +309,30 @@ internal class MangaLivre(context: MangaLoaderContext) :
         }
     }
 
+    override suspend fun getRelatedManga(seed: Manga): List<Manga> {
+        val fullUrl = seed.url.toAbsoluteUrl(domain)
+        val doc = captureDocument(fullUrl, buildPathPattern(seed.url))
+        val root = doc.body().selectFirst(".related-manga") ?: return emptyList()
+        return root.select("div.related-reading-wrap").mapNotNull { div ->
+            val link = div.selectFirst("a") ?: return@mapNotNull null
+            val href = link.attrAsRelativeUrlOrNull("href") ?: return@mapNotNull null
+            Manga(
+                id = generateUid(href),
+                url = href,
+                publicUrl = href.toAbsoluteUrl(link.host ?: domain),
+                altTitles = emptySet(),
+                title = div.selectFirst(".widget-title")?.text().orEmpty().ifEmpty { return@mapNotNull null },
+                authors = emptySet(),
+                coverUrl = div.selectFirst("img")?.src(),
+                tags = emptySet(),
+                rating = RATING_UNKNOWN,
+                state = null,
+                contentRating = if (isNsfwSource) ContentRating.ADULT else null,
+                source = source,
+            )
+        }
+    }
+
     override suspend fun getDetails(manga: Manga): Manga {
         println("DEBUG: MangaLivre.getDetails called for: ${manga.title}")
 

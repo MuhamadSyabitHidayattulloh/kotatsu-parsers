@@ -91,13 +91,17 @@ internal class MadaraDex(context: MangaLoaderContext) :
         }.getOrNull()
 
         doc = fetchChapterDocument(url)
-        if (doc == null || isCloudflareDocument(doc)) {
+        val resolved = doc ?: throw ParseException(
+            "Cloudflare verification is still required. Please open the chapter in the in-app browser and retry.",
+            url,
+        )
+        if (isCloudflareDocument(resolved)) {
             throw ParseException(
                 "Cloudflare verification is still required. Please open the chapter in the in-app browser and retry.",
                 url,
             )
         }
-        return doc
+        return resolved
     }
 
     private suspend fun fetchChapterDocument(url: String): Document? {

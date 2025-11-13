@@ -12,7 +12,6 @@ import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.koitharu.kotatsu.parsers.network.UserAgents
 import org.koitharu.kotatsu.parsers.site.madara.MadaraParser
 import org.koitharu.kotatsu.parsers.util.*
-import java.util.Locale
 
 @MangaSourceParser("MADARADEX", "MadaraDex", "en", ContentType.HENTAI)
 internal class MadaraDex(context: MangaLoaderContext) :
@@ -48,14 +47,8 @@ internal class MadaraDex(context: MangaLoaderContext) :
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
         val fullUrl = chapter.url.toAbsoluteUrl(domain)
 
-        // Warm up Cloudflare by driving a lightweight WebView visit before fetching images.
-        runCatching {
-            context.captureWebViewUrls(
-                pageUrl = fullUrl,
-                urlPattern = Regex("https?://cdn\\.madaradex\\.org/.*", RegexOption.IGNORE_CASE),
-                timeout = 4000L,
-            )
-        }.getOrNull()
+        // Warm up Cloudflare by loading the chapter once in a WebView before fetching via HTTP.
+        warmUpWithWebView(fullUrl, timeout = 4000L)
 
         val doc = loadChapterDocument(fullUrl)
         val root = doc.body().selectFirst(selectBodyPage)
@@ -77,32 +70,30 @@ internal class MadaraDex(context: MangaLoaderContext) :
 
     private suspend fun loadChapterDocument(url: String): Document {
         var doc = fetchChapterDocument(url)
-        if (doc != null && !isCloudflareDocument(doc)) {
+        if (doc?.hasChapterImages() == true) {
+            return doc
+        }
+
+        warmUpWithWebView(url, timeout = 4000L)
+
+        doc = fetchChapterDocument(url)
+        if (doc?.hasChapterImages() == true) {
             return doc
         }
 
         context.requestBrowserAction(this, url)
 
-        runCatching {
-            context.captureWebViewUrls(
-                pageUrl = url,
-                urlPattern = Regex("https?://cdn\\.madaradex\\.org/.*", RegexOption.IGNORE_CASE),
-                timeout = 6000L,
-            )
-        }.getOrNull()
+        warmUpWithWebView(url, timeout = 6000L)
 
         doc = fetchChapterDocument(url)
-        val resolved = doc ?: throw ParseException(
+        if (doc?.hasChapterImages() == true) {
+            return doc
+        }
+
+        throw ParseException(
             "Cloudflare verification is still required. Please open the chapter in the in-app browser and retry.",
             url,
         )
-        if (isCloudflareDocument(resolved)) {
-            throw ParseException(
-                "Cloudflare verification is still required. Please open the chapter in the in-app browser and retry.",
-                url,
-            )
-        }
-        return resolved
     }
 
     private suspend fun fetchChapterDocument(url: String): Document? {
@@ -110,16 +101,36 @@ internal class MadaraDex(context: MangaLoaderContext) :
         return response.use { res -> runCatching { res.parseHtml() }.getOrNull() }
     }
 
-    private fun isCloudflareDocument(doc: Document): Boolean {
-        val html = doc.outerHtml()
-        if (html.length < 200) {
-            return true
-        }
-        val lower = html.lowercase(Locale.ROOT)
-        return lower.contains("cf-browser-verification") ||
-            lower.contains("turnstile") ||
-            lower.contains("checking your browser") ||
-            lower.contains("checking if the site connection is secure") ||
-            lower.contains("challenge-platform")
+    private suspend fun warmUpWithWebView(url: String, timeout: Long) {
+        runCatching {
+            val script = """
+                (() => {
+                    return new Promise(resolve => {
+                        const finish = () => resolve('done');
+                        if (document.readyState === 'complete') {
+                            setTimeout(finish, 200);
+                        } else {
+                            window.addEventListener('load', () => setTimeout(finish, 200), { once: true });
+                        }
+                        setTimeout(finish, $timeout);
+                    });
+                })();
+            """.trimIndent()
+
+            context.evaluateJs(url, script)
+        }.getOrNull()
     }
+
+    private fun Document.hasChapterImages(): Boolean {
+        val container = body().selectFirst(selectBodyPage) ?: return false
+        return container.select(selectPage).any { page ->
+            page.select("img").any { img ->
+                img.hasAttr("src") ||
+                    img.hasAttr("data-src") ||
+                    img.hasAttr("data-lazy-src") ||
+                    img.hasAttr("data-original")
+            }
+        }
+    }
+
 }

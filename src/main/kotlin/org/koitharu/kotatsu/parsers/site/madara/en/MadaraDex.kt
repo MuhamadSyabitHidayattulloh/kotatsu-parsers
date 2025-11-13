@@ -72,12 +72,14 @@ internal class MadaraDex(context: MangaLoaderContext) :
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
         val url = request.url
+        val cleanUrl = url.newBuilder().fragment(null).build()
         val fullUrl = url.fragment?.substringAfter(F_URL, "")
-        return if (!fullUrl.isNullOrEmpty()) {
+        val host = url.host.orEmpty()
+
+        return if (host.equals("cdn.madaradex.org", ignoreCase = true) || !fullUrl.isNullOrEmpty()) {
             copyCookies()
-            val cleanUrl = url.newBuilder().fragment(null).toString()
             val newReq = request.newBuilder()
-                .header("Referer", fullUrl)
+                .header("Referer", "https://${domain}/")
                 .url(cleanUrl)
                 .build()
             chain.proceed(newReq)

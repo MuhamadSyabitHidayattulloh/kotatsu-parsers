@@ -12,8 +12,10 @@ import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.koitharu.kotatsu.parsers.network.UserAgents
 import org.koitharu.kotatsu.parsers.site.madara.MadaraParser
 import org.koitharu.kotatsu.parsers.util.*
+import org.koitharu.kotatsu.parsers.Broken
 import java.util.Locale
 
+@Broken
 @MangaSourceParser("MADARADEX", "MadaraDex", "en", ContentType.HENTAI)
 internal class MadaraDex(context: MangaLoaderContext) :
     MadaraParser(context, MangaParserSource.MADARADEX, "madaradex.org") {
@@ -47,16 +49,6 @@ internal class MadaraDex(context: MangaLoaderContext) :
 
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
         val fullUrl = chapter.url.toAbsoluteUrl(domain)
-
-        // Warm up Cloudflare by driving a lightweight WebView visit before fetching images.
-        runCatching {
-            context.captureWebViewUrls(
-                pageUrl = fullUrl,
-                urlPattern = Regex("https?://cdn\\.madaradex\\.org/.*", RegexOption.IGNORE_CASE),
-                timeout = 4000L,
-            )
-        }.getOrNull()
-
         val doc = loadChapterDocument(fullUrl)
         val root = doc.body().selectFirst(selectBodyPage)
             ?: throw ParseException("No image found, try to log in", fullUrl)
@@ -82,14 +74,6 @@ internal class MadaraDex(context: MangaLoaderContext) :
         }
 
         context.requestBrowserAction(this, url)
-
-        runCatching {
-            context.captureWebViewUrls(
-                pageUrl = url,
-                urlPattern = Regex("https?://cdn\\.madaradex\\.org/.*", RegexOption.IGNORE_CASE),
-                timeout = 6000L,
-            )
-        }.getOrNull()
 
         doc = fetchChapterDocument(url)
         val resolved = doc ?: throw ParseException(

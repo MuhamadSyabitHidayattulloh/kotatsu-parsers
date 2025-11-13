@@ -37,7 +37,7 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 
 	private val detailDateFormat = SimpleDateFormat("MMMM d, yyyy", Locale.US)
 
-	override val availableSortOrders: Set<SortOrder> = EnumSet.noneOf(SortOrder::class.java)
+	override val availableSortOrders: Set<SortOrder> = EnumSet.of(SortOrder.RELEVANCE)
 
 	override val filterCapabilities: MangaListFilterCapabilities
 		get() = MangaListFilterCapabilities(

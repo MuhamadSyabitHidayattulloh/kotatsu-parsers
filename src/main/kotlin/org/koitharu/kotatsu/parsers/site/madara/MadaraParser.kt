@@ -3,6 +3,9 @@ package org.koitharu.kotatsu.parsers.site.madara
 import androidx.collection.scatterSetOf
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import okhttp3.Interceptor
+import okhttp3.Request
+import okhttp3.Response
 import org.json.JSONObject
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -24,6 +27,8 @@ internal abstract class MadaraParser(
 	domain: String,
 	pageSize: Int = 12,
 ) : PagedMangaParser(context, source, pageSize), MangaParserAuthProvider {
+
+	private val imageExtensions = arrayOf(".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif")
 
 	override val configKeyDomain = ConfigKey.Domain(domain)
 
@@ -112,6 +117,47 @@ internal abstract class MadaraParser(
 	protected open val datePattern = "MMMM d, yyyy"
 	protected open val stylePage = "?style=list"
 	protected open val postReq = false
+
+	override fun intercept(chain: Interceptor.Chain): Response {
+		val originalRequest = chain.request()
+		val newRequest = if (shouldAttachImageReferer(originalRequest)) {
+			originalRequest.newBuilder()
+				.header("Referer", "https://${domain}/")
+				.build()
+		} else {
+			null
+		}
+
+		return when {
+			newRequest != null -> chain.proceed(newRequest)
+			else -> super.intercept(chain)
+		}
+	}
+
+	private fun shouldAttachImageReferer(request: Request): Boolean {
+		if (!request.header("Referer").isNullOrEmpty()) {
+			return false
+		}
+		val method = request.method
+		if (method != "GET" && method != "HEAD") {
+			return false
+		}
+		val host = request.url.host.lowercase(Locale.ROOT)
+		val configuredDomain = domain.lowercase(Locale.ROOT)
+		val hostMatches = host == configuredDomain || host.endsWith(".$configuredDomain") || host.contains(configuredDomain)
+		if (!hostMatches) {
+			return false
+		}
+		val path = request.url.encodedPath.lowercase(Locale.ROOT)
+		if (imageExtensions.any { suffix -> path.endsWith(suffix) }) {
+			return true
+		}
+		if (path.contains("/wp-content/")) {
+			return true
+		}
+		val accept = request.header("Accept")
+		return accept != null && accept.contains("image", ignoreCase = true)
+	}
 
 	init {
 		paginator.firstPage = 0

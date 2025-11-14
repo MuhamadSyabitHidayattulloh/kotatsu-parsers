@@ -6,7 +6,6 @@ import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.exception.ParseException
 import org.koitharu.kotatsu.parsers.model.*
-import org.koitharu.kotatsu.parsers.network.CloudFlareHelper
 import org.koitharu.kotatsu.parsers.site.madara.MadaraParser
 import org.koitharu.kotatsu.parsers.util.*
 
@@ -34,12 +33,18 @@ internal class MangaLivre(context: MangaLoaderContext) :
         timeoutMs: Long = 15000L,
         allowBrowserAction: Boolean = true,
     ): Document {
-        tryHttpDocument(initialUrl)?.let { doc ->
-            println("DEBUG: captureDocument resolved via HTTP without WebView for $initialUrl")
+        // Skip HTTP attempts entirely - Cloudflare protects all pages
+        // Use WebView-only approach
+
+        println("DEBUG: captureDocument loading $initialUrl via WebView (pattern=${preferredMatch?.pattern ?: "*"})")
+
+        // Try direct WebView first
+        loadDocumentViaWebView(initialUrl)?.let { doc ->
+            println("DEBUG: captureDocument succeeded via direct WebView for $initialUrl")
             return doc
         }
 
-        println("DEBUG: captureDocument loading $initialUrl (pattern=${preferredMatch?.pattern ?: "*"})")
+        // If direct WebView fails, try capturing URLs and use WebView on captured URL
         val capturedUrls = try {
             context.captureWebViewUrls(
                 pageUrl = initialUrl,
@@ -71,11 +76,7 @@ internal class MangaLivre(context: MangaLoaderContext) :
 
         println("DEBUG: captureDocument resolved URL: $finalUrl (from ${capturedUrls.size} captures)")
 
-        tryHttpDocument(finalUrl)?.let { doc ->
-            println("DEBUG: captureDocument succeeded via HTTP fetch for $finalUrl")
-            return doc
-        }
-
+        // Use WebView only, no HTTP attempts on captured URLs
         loadDocumentViaWebView(finalUrl)?.let { doc ->
             println("DEBUG: captureDocument obtained HTML via evaluateJs for $finalUrl")
             return doc
@@ -84,30 +85,12 @@ internal class MangaLivre(context: MangaLoaderContext) :
         if (allowBrowserAction) {
             println("INFO: Requesting browser action to solve Cloudflare for $finalUrl")
             context.requestBrowserAction(this, finalUrl)
-            return captureDocument(initialUrl, preferredMatch, timeoutMs, allowBrowserAction = false)
+            throw ParseException("Browser action requested for Cloudflare bypass", finalUrl)
         }
 
         throw ParseException("Failed to load page via webview", finalUrl)
     }
 
-    private suspend fun tryHttpDocument(url: String): Document? {
-        val response = runCatching { webClient.httpGet(url) }.getOrNull() ?: return null
-        response.use { res ->
-            val protection = CloudFlareHelper.checkResponseForProtection(res.copy())
-            if (protection != CloudFlareHelper.PROTECTION_NOT_DETECTED) {
-                println("WARN: Cloudflare protection detected ($protection) while fetching $url")
-                return null
-            }
-            val doc = res.parseHtml()
-            val html = doc.outerHtml()
-            println("DEBUG: tryHttpDocument parsed HTML length=${html.length} for $url")
-            if (isCloudflareHtml(html)) {
-                println("WARN: tryHttpDocument detected Cloudflare challenge markup for $url")
-                return null
-            }
-            return doc
-        }
-    }
 
     private suspend fun loadDocumentViaWebView(url: String): Document? {
         val script = """

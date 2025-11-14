@@ -290,54 +290,47 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 		timeoutMs: Long = 15000L,
 		allowBrowserAction: Boolean = true,
 	): Document {
-		if (!preferWebViewFirst) {
+		// Only use WebView for search operations, regular browsing should work with HTTP
+		if (preferWebViewFirst) {
+			// For search, use WebView first
+			loadDocumentViaWebView(initialUrl)?.let { doc ->
+				return doc
+			}
+
+			val capturedUrls = try {
+				context.captureWebViewUrls(
+					pageUrl = initialUrl,
+					urlPattern = captureAllPattern,
+					timeout = timeoutMs,
+				)
+			} catch (e: Exception) {
+				throw ParseException(cloudflareMessage, initialUrl, e)
+			}
+
+			if (capturedUrls.isNotEmpty()) {
+				val resolvedUrl = preferredMatch?.let { regex ->
+					capturedUrls.firstOrNull { url -> regex.containsMatchIn(url) }
+				} ?: capturedUrls.firstOrNull { url ->
+					url.startsWith("https://$domain") || url.startsWith("http://$domain")
+				} ?: capturedUrls.first()
+
+				loadDocumentViaWebView(resolvedUrl)?.let { doc ->
+					return doc
+				}
+			}
+
+			if (allowBrowserAction) {
+				context.requestBrowserAction(this, initialUrl)
+			}
+			throw ParseException(cloudflareMessage, initialUrl)
+		} else {
+			// For regular browsing, just use HTTP
 			tryHttpDocument(initialUrl)?.let { doc ->
 				return doc
 			}
+
+			throw ParseException("Failed to load page", initialUrl)
 		}
-
-		val capturedUrls = try {
-			context.captureWebViewUrls(
-				pageUrl = initialUrl,
-				urlPattern = captureAllPattern,
-				timeout = timeoutMs,
-			)
-		} catch (e: Exception) {
-			throw ParseException(cloudflareMessage, initialUrl, e)
-		}
-
-		if (capturedUrls.isEmpty()) {
-			throw ParseException(cloudflareMessage, initialUrl)
-		}
-
-		val resolvedUrl = preferredMatch?.let { regex ->
-			capturedUrls.firstOrNull { url -> regex.containsMatchIn(url) }
-		} ?: capturedUrls.firstOrNull { url ->
-			url.startsWith("https://$domain") || url.startsWith("http://$domain")
-		} ?: capturedUrls.first()
-
-		val finalUrl = resolvedUrl ?: initialUrl
-
-		tryHttpDocument(finalUrl)?.let { doc ->
-			return doc
-		}
-
-		loadDocumentViaWebView(finalUrl)?.let { doc ->
-			return doc
-		}
-
-		if (allowBrowserAction) {
-			context.requestBrowserAction(this, finalUrl)
-			return captureDocument(
-				initialUrl = initialUrl,
-				preferredMatch = preferredMatch,
-				preferWebViewFirst = preferWebViewFirst,
-				timeoutMs = timeoutMs,
-				allowBrowserAction = false,
-			)
-		}
-
-		throw ParseException(cloudflareMessage, finalUrl)
 	}
 
 	private suspend fun tryHttpDocument(url: String): Document? {

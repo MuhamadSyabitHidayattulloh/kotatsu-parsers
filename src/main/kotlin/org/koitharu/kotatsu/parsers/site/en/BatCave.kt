@@ -54,9 +54,12 @@ internal class BatCave(context: MangaLoaderContext) :
 		timeoutMs: Long = 15000L,
 		allowBrowserAction: Boolean = true,
 	): Document {
-		// Skip HTTP attempts entirely - Cloudflare protects all pages
-		// Go directly to WebView for all requests
+		// Try HTTP first - only use WebView if Cloudflare protection is detected
+		tryHttpDocument(initialUrl)?.let { doc ->
+			return doc
+		}
 
+		// HTTP failed, likely due to Cloudflare protection - try WebView
 		loadDocumentViaWebView(initialUrl)?.let { doc ->
 			return doc
 		}
@@ -89,10 +92,22 @@ internal class BatCave(context: MangaLoaderContext) :
 
 		if (allowBrowserAction) {
 			context.requestBrowserAction(this, finalUrl)
-			return captureDocument(initialUrl, preferredMatch, timeoutMs, allowBrowserAction = false)
+			throw ParseException("Browser action requested for Cloudflare bypass", finalUrl)
 		}
 
 		throw ParseException("Failed to load page via webview", finalUrl)
+	}
+
+	private suspend fun tryHttpDocument(url: String): Document? {
+		val response = runCatching { webClient.httpGet(url) }.getOrNull() ?: return null
+		return response.use { res ->
+			val doc = runCatching { res.parseHtml() }.getOrNull() ?: return null
+			val html = doc.outerHtml()
+			if (isCloudflareHtml(html)) {
+				return null
+			}
+			doc
+		}
 	}
 
 
@@ -125,16 +140,17 @@ internal class BatCave(context: MangaLoaderContext) :
 	}
 
 	private fun isCloudflareHtml(html: String): Boolean {
-		if (html.length < 200) {
-			return true
+		if (html.length < 50) {
+			return true // Only reject extremely short responses
 		}
 		val lower = html.lowercase()
 		return lower.contains("cf-browser-verification") ||
 			lower.contains("checking if the site connection is secure") ||
 			lower.contains("checking your browser before accessing") ||
+			lower.contains("just a moment") ||
 			lower.contains("cf-chl") ||
 			lower.contains("cf-turnstile") ||
-			(lower.contains("cloudflare") && lower.contains("captcha"))
+			(lower.contains("cloudflare") && (lower.contains("captcha") || lower.contains("challenge")))
 	}
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {

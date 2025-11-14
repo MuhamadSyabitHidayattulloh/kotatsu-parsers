@@ -1,13 +1,15 @@
 package org.koitharu.kotatsu.parsers.site.en
 
 import org.json.JSONObject
-import org.koitharu.kotatsu.parsers.Broken
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.core.PagedMangaParser
 import org.koitharu.kotatsu.parsers.exception.ParseException
 import org.koitharu.kotatsu.parsers.model.*
+import org.koitharu.kotatsu.parsers.network.CloudFlareHelper
 import org.koitharu.kotatsu.parsers.util.*
 import org.koitharu.kotatsu.parsers.util.json.getFloatOrDefault
 import org.koitharu.kotatsu.parsers.util.json.getStringOrNull
@@ -16,7 +18,6 @@ import org.koitharu.kotatsu.parsers.util.suspendlazy.suspendLazy
 import java.text.SimpleDateFormat
 import java.util.*
 
-@Broken
 @MangaSourceParser("BATCAVE", "BatCave", "en", ContentType.COMICS)
 internal class BatCave(context: MangaLoaderContext) :
 	PagedMangaParser(context, MangaParserSource.BATCAVE, 20) {
@@ -28,6 +29,7 @@ internal class BatCave(context: MangaLoaderContext) :
         .build()
 
 	private val availableTags = suspendLazy(initializer = ::fetchTags)
+	private val captureAllPattern = Regex(".*")
 
 	override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
 		super.onCreateConfig(keys)
@@ -46,6 +48,111 @@ internal class BatCave(context: MangaLoaderContext) :
 	override suspend fun getFilterOptions() = MangaListFilterOptions(
 		availableTags = availableTags.get(),
 	)
+
+	private suspend fun captureDocument(
+		initialUrl: String,
+		preferredMatch: Regex? = null,
+		timeoutMs: Long = 15000L,
+		allowBrowserAction: Boolean = true,
+	): Document {
+		tryHttpDocument(initialUrl)?.let { doc ->
+			return doc
+		}
+
+		val capturedUrls = try {
+			context.captureWebViewUrls(
+				pageUrl = initialUrl,
+				urlPattern = captureAllPattern,
+				timeout = timeoutMs,
+			)
+		} catch (e: Exception) {
+			throw ParseException("Failed to capture webview URLs", initialUrl, e)
+		}
+
+		if (capturedUrls.isEmpty()) {
+			throw ParseException("WebView did not produce any matching requests", initialUrl)
+		}
+
+		val resolvedUrl = preferredMatch?.let { pattern ->
+			capturedUrls.firstOrNull { pattern.containsMatchIn(it) }
+		} ?: capturedUrls.firstOrNull { url ->
+			url.startsWith("https://$domain") || url.startsWith("http://$domain")
+		} ?: capturedUrls.firstOrNull()
+
+		val finalUrl = resolvedUrl ?: initialUrl
+
+		tryHttpDocument(finalUrl)?.let { doc ->
+			return doc
+		}
+
+		loadDocumentViaWebView(finalUrl)?.let { doc ->
+			return doc
+		}
+
+		if (allowBrowserAction) {
+			context.requestBrowserAction(this, finalUrl)
+			return captureDocument(initialUrl, preferredMatch, timeoutMs, allowBrowserAction = false)
+		}
+
+		throw ParseException("Failed to load page via webview", finalUrl)
+	}
+
+	private suspend fun tryHttpDocument(url: String): Document? {
+		val response = runCatching { webClient.httpGet(url) }.getOrNull() ?: return null
+		response.use { res ->
+			val protection = CloudFlareHelper.checkResponseForProtection(res.copy())
+			if (protection != CloudFlareHelper.PROTECTION_NOT_DETECTED) {
+				return null
+			}
+			val doc = res.parseHtml()
+			val html = doc.outerHtml()
+			if (isCloudflareHtml(html)) {
+				return null
+			}
+			return doc
+		}
+	}
+
+	private suspend fun loadDocumentViaWebView(url: String): Document? {
+		val script = """
+			(() => {
+				return new Promise(resolve => {
+					const finish = () => {
+						resolve(document.documentElement ? document.documentElement.outerHTML : "");
+					};
+					if (document.readyState === "complete") {
+						setTimeout(finish, 200);
+					} else {
+						window.addEventListener("load", () => setTimeout(finish, 200), { once: true });
+					}
+					setTimeout(finish, 3000);
+				});
+			})();
+		""".trimIndent()
+
+		val html = context.evaluateJs(url, script) ?: return null
+		if (html.isBlank()) {
+			return null
+		}
+		if (isCloudflareHtml(html)) {
+			return null
+		}
+		val doc = Jsoup.parse(html, url)
+		return doc
+	}
+
+	private fun isCloudflareHtml(html: String): Boolean {
+		if (html.length < 200) {
+			return true
+		}
+		val lower = html.lowercase()
+		return lower.contains("cf-browser-verification") ||
+			lower.contains("checking if the site connection is secure") ||
+			lower.contains("checking your browser before accessing") ||
+			lower.contains("cf-chl") ||
+			lower.contains("cf-turnstile") ||
+			(lower.contains("cloudflare") && lower.contains("captcha"))
+	}
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
 		val urlBuilder = StringBuilder()
@@ -81,7 +188,7 @@ internal class BatCave(context: MangaLoaderContext) :
 		}
 
 		val fullUrl = urlBuilder.toString().toAbsoluteUrl(domain)
-		val doc = webClient.httpGet(fullUrl).parseHtml()
+		val doc = captureDocument(fullUrl)
 		return doc.select("div.readed.d-flex.short").map { item ->
 			val a = item.selectFirstOrThrow("a.readed__img.img-fit-cover.anim")
 			val titleElement = item.selectFirstOrThrow("h2.readed__title a")
@@ -106,7 +213,7 @@ internal class BatCave(context: MangaLoaderContext) :
 	}
 
 	override suspend fun getDetails(manga: Manga): Manga {
-		val doc = webClient.httpGet(manga.url.toAbsoluteUrl(domain)).parseHtml()
+		val doc = captureDocument(manga.url.toAbsoluteUrl(domain))
 
 		val dateFormat = SimpleDateFormat("dd.MM.yyyy", Locale.US)
 
@@ -177,7 +284,7 @@ internal class BatCave(context: MangaLoaderContext) :
 	}
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-		val doc = webClient.httpGet(chapter.url.toAbsoluteUrl(domain)).parseHtml()
+		val doc = captureDocument(chapter.url.toAbsoluteUrl(domain))
 		val data = doc.selectFirst("script:containsData(__DATA__)")?.data()
 			?.substringAfter("=")
 			?.trim()
@@ -199,7 +306,7 @@ internal class BatCave(context: MangaLoaderContext) :
 	}
 
 	private suspend fun fetchTags(): Set<MangaTag> {
-		val doc = webClient.httpGet("https://$domain/comix/").parseHtml()
+		val doc = captureDocument("https://$domain/comix/")
 		val scriptData = doc.selectFirstOrThrow("script:containsData(__XFILTER__)").data()
 
 		val genresJson = scriptData

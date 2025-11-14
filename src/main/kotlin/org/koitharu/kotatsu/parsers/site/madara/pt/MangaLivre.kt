@@ -33,112 +33,64 @@ internal class MangaLivre(context: MangaLoaderContext) :
         timeoutMs: Long = 15000L,
         allowBrowserAction: Boolean = true,
     ): Document {
-        // Skip HTTP attempts entirely - Cloudflare protects all pages
-        // Use WebView-only approach
+        println("DEBUG: captureDocument loading $initialUrl with captureWebViewUrls")
 
-        println("DEBUG: captureDocument loading $initialUrl via WebView (pattern=${preferredMatch?.pattern ?: "*"})")
-
-        // Try direct WebView first
-        loadDocumentViaWebView(initialUrl)?.let { doc ->
-            println("DEBUG: captureDocument succeeded via direct WebView for $initialUrl")
-            return doc
-        }
-
-        // If direct WebView fails, try capturing URLs and use WebView on captured URL
+        // First, load the webview and let it handle redirects
         val capturedUrls = try {
             context.captureWebViewUrls(
                 pageUrl = initialUrl,
                 urlPattern = captureAllPattern,
-                timeout = timeoutMs,
+                timeout = timeoutMs
             )
         } catch (e: Exception) {
             println("ERROR: captureWebViewUrls failed for $initialUrl (${e.message})")
             throw ParseException("Failed to capture webview URLs", initialUrl, e)
         }
 
-        if (capturedUrls.isEmpty()) {
-            println("ERROR: captureWebViewUrls returned no matches for $initialUrl")
-            throw ParseException("WebView did not produce any matching requests", initialUrl)
+        println("DEBUG: Captured ${capturedUrls.size} URLs from WebView")
+
+        // Now get the HTML content from the loaded page
+        val script = """
+            document.documentElement ? document.documentElement.outerHTML : "";
+        """.trimIndent()
+
+        val html = try {
+            context.evaluateJs(initialUrl, script)
+        } catch (e: Exception) {
+            println("ERROR: evaluateJs failed after captureWebViewUrls for $initialUrl (${e.message})")
+            null
         }
 
-        val resolvedUrl = preferredMatch?.let { pattern ->
-            capturedUrls.firstOrNull { pattern.containsMatchIn(it) }?.also {
-                println("DEBUG: Preferred pattern matched URL: $it")
-            } ?: run {
-                println("WARN: Preferred pattern ${pattern.pattern} not found in captured URLs")
-                null
+        if (html.isNullOrBlank()) {
+            println("ERROR: No HTML content captured for $initialUrl")
+        } else {
+            val doc = Jsoup.parse(html, initialUrl)
+            println("DEBUG: Captured ${html.length} chars for $initialUrl")
+
+            // Check for valid content
+            if (hasValidMangaLivreContent(doc)) {
+                println("DEBUG: Found valid MangaLivre content")
+                return doc
             }
-        } ?: capturedUrls.firstOrNull { url ->
-            url.startsWith("https://$domain") || url.startsWith("http://$domain")
-        } ?: capturedUrls.firstOrNull()
 
-        val finalUrl = resolvedUrl ?: initialUrl
+            // Check if it's a Cloudflare challenge
+            if (!isActiveCloudflareChallenge(html) && html.length > 1000) {
+                println("DEBUG: Accepting substantial non-Cloudflare content")
+                return doc
+            }
 
-        println("DEBUG: captureDocument resolved URL: $finalUrl (from ${capturedUrls.size} captures)")
-
-        // Use WebView only, no HTTP attempts on captured URLs
-        loadDocumentViaWebView(finalUrl)?.let { doc ->
-            println("DEBUG: captureDocument obtained HTML via evaluateJs for $finalUrl")
-            return doc
+            println("WARN: Content appears to be Cloudflare challenge or invalid")
         }
 
         if (allowBrowserAction) {
-            println("INFO: Requesting browser action to solve Cloudflare for $finalUrl")
-            context.requestBrowserAction(this, finalUrl)
-            throw ParseException("Browser action requested for Cloudflare bypass", finalUrl)
+            println("INFO: Requesting browser action to solve Cloudflare for $initialUrl")
+            context.requestBrowserAction(this, initialUrl)
+            throw ParseException("Browser action requested for Cloudflare bypass", initialUrl)
         }
 
-        throw ParseException("Failed to load page via webview", finalUrl)
+        throw ParseException("Failed to load page content", initialUrl)
     }
 
-
-    private suspend fun loadDocumentViaWebView(url: String): Document? {
-        val script = """
-            (() => {
-                return new Promise(resolve => {
-                    setTimeout(() => {
-                        resolve(document.documentElement ? document.documentElement.outerHTML : "");
-                    }, 8000);
-                });
-            })();
-        """.trimIndent()
-
-        val html = context.evaluateJs(url, script) ?: return null
-        if (html.isBlank()) {
-            println("WARN: evaluateJs returned blank HTML for $url")
-            return null
-        }
-
-        val doc = Jsoup.parse(html, url)
-        println("DEBUG: loadDocumentViaWebView parsed HTML length=${html.length} for $url")
-
-        // Check for successful MangaLivre content first
-        if (hasValidMangaLivreContent(doc)) {
-            println("DEBUG: Found valid MangaLivre content for $url")
-            return doc
-        }
-
-        // Only reject if it's clearly an active Cloudflare challenge
-        if (isActiveCloudflareChallenge(html)) {
-            println("WARN: evaluateJs returned active Cloudflare challenge for $url (${html.length} chars)")
-            return null
-        }
-
-        // If we got substantial HTML content, allow it through
-        if (html.length > 1000) {
-            println("DEBUG: Allowing substantial page through for $url (${html.length} chars)")
-            return doc
-        }
-
-        // For smaller content, be more conservative
-        if (html.length < 100) {
-            println("WARN: Small content received for $url (${html.length} chars), rejecting")
-            return null
-        }
-
-        println("DEBUG: Accepting small but potentially valid content for $url (${html.length} chars)")
-        return doc
-    }
 
     private fun hasValidMangaLivreContent(doc: Document): Boolean {
         // Check for MangaLivre-specific content that indicates successful load

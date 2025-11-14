@@ -114,26 +114,48 @@ internal class MangaLivre(context: MangaLoaderContext) :
             println("WARN: evaluateJs returned blank HTML for $url")
             return null
         }
-        if (isCloudflareHtml(html)) {
-            println("WARN: evaluateJs returned potential Cloudflare challenge for $url")
-            return null
-        }
+
         val doc = Jsoup.parse(html, url)
         println("DEBUG: loadDocumentViaWebView parsed HTML length=${doc.outerHtml().length} for $url")
+
+        // Check for successful MangaLivre content first
+        if (hasValidMangaLivreContent(doc)) {
+            println("DEBUG: Found valid MangaLivre content for $url")
+            return doc
+        }
+
+        // Only reject if it's clearly an active Cloudflare challenge
+        if (isActiveCloudflareChallenge(html)) {
+            println("WARN: evaluateJs returned active Cloudflare challenge for $url")
+            return null
+        }
+
+        // If we're not sure, allow the page through
+        println("DEBUG: Allowing uncertain page through for $url")
         return doc
     }
 
-    private fun isCloudflareHtml(html: String): Boolean {
-        if (html.length < 200) {
+    private fun hasValidMangaLivreContent(doc: Document): Boolean {
+        // Check for MangaLivre-specific content that indicates successful load
+        return doc.select("div.manga__item").isNotEmpty() ||
+            doc.select("div.search-lists").isNotEmpty() ||
+            doc.select("div.page-content-listing").isNotEmpty() ||
+            doc.select("div.genres_wrap").isNotEmpty() ||
+            doc.select("header ul.second-menu").isNotEmpty() ||
+            doc.title().contains("manga livre", ignoreCase = true) ||
+            doc.select("div.summary-content").isNotEmpty()
+    }
+
+    private fun isActiveCloudflareChallenge(html: String): Boolean {
+        if (html.length < 100) {
             return true
         }
         val lower = html.lowercase()
-        return lower.contains("cf-browser-verification") ||
-            lower.contains("checking if the site connection is secure") ||
-            lower.contains("checking your browser before accessing") ||
-            lower.contains("cf-chl") ||
-            lower.contains("cf-turnstile") ||
-            (lower.contains("cloudflare") && lower.contains("captcha"))
+        // Only reject pages that are clearly active challenge pages
+        return (lower.contains("just a moment") && lower.contains("cloudflare")) ||
+            (lower.contains("checking your browser") && lower.contains("cloudflare")) ||
+            lower.contains("cf-browser-verification") ||
+            lower.contains("cf-chl-opt")
     }
 
     // Override fetchAvailableTags to also use webview

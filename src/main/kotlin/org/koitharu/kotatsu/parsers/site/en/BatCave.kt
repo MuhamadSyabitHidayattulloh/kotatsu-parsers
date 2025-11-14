@@ -132,25 +132,42 @@ internal class BatCave(context: MangaLoaderContext) :
 		if (html.isBlank()) {
 			return null
 		}
-		if (isCloudflareHtml(html)) {
+
+		val doc = Jsoup.parse(html, url)
+
+		// Check for successful BatCave content instead of rejecting Cloudflare
+		if (hasValidBatCaveContent(doc)) {
+			return doc
+		}
+
+		// Only reject if it's clearly an active Cloudflare challenge page
+		if (isActiveCloudflareChallenge(html)) {
 			return null
 		}
-		val doc = Jsoup.parse(html, url)
+
+		// If we're not sure, allow the page through
 		return doc
 	}
 
-	private fun isCloudflareHtml(html: String): Boolean {
-		if (html.length < 50) {
-			return true // Only reject extremely short responses
+	private fun hasValidBatCaveContent(doc: Document): Boolean {
+		// Check for BatCave-specific content that indicates successful load
+		return doc.select("div.readed.d-flex.short").isNotEmpty() ||
+			doc.select("script:containsData(__DATA__)").isNotEmpty() ||
+			doc.select("script:containsData(__XFILTER__)").isNotEmpty() ||
+			doc.select("h1.serie-title").isNotEmpty() ||
+			doc.title().contains("BatCave", ignoreCase = true)
+	}
+
+	private fun isActiveCloudflareChallenge(html: String): Boolean {
+		if (html.length < 100) {
+			return true
 		}
 		val lower = html.lowercase()
-		return lower.contains("cf-browser-verification") ||
-			lower.contains("checking if the site connection is secure") ||
-			lower.contains("checking your browser before accessing") ||
-			lower.contains("just a moment") ||
-			lower.contains("cf-chl") ||
-			lower.contains("cf-turnstile") ||
-			(lower.contains("cloudflare") && (lower.contains("captcha") || lower.contains("challenge")))
+		// Only reject pages that are clearly active challenge pages
+		return (lower.contains("just a moment") && lower.contains("cloudflare")) ||
+			(lower.contains("checking your browser") && lower.contains("cloudflare")) ||
+			lower.contains("cf-browser-verification") ||
+			lower.contains("cf-chl-opt")
 	}
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {

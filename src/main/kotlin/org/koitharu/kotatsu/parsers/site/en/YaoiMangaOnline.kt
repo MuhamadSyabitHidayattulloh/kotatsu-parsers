@@ -336,14 +336,20 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 	private suspend fun tryHttpDocument(url: String): Document? {
 		val response = runCatching { webClient.httpGet(url) }.getOrNull() ?: return null
 		return response.use { res ->
-			val protection = CloudFlareHelper.checkResponseForProtection(res.copy())
-			if (protection != CloudFlareHelper.PROTECTION_NOT_DETECTED) {
-				return null
-			}
 			val doc = runCatching { res.parseHtml() }.getOrNull() ?: return null
-			if (doc.isCloudflareChallenge()) {
+
+			// Check for successful YaoiMangaOnline content first
+			if (hasValidYaoiContent(doc)) {
+				return doc
+			}
+
+			// Only reject if it's clearly an active Cloudflare challenge
+			val html = doc.outerHtml()
+			if (isActiveCloudflareChallenge(html)) {
 				return null
 			}
+
+			// If we're not sure, allow the page through
 			doc
 		}
 	}
@@ -351,22 +357,22 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 	private suspend fun loadDocumentViaWebView(url: String): Document? {
 		val script = """
 			(() => {
-				const hasContent = () => {
+				const hasYaoiContent = () => {
 					if (!document.documentElement) {
 						return false;
 					}
-					const html = document.documentElement.outerHTML.toLowerCase();
-					if (html.includes("cf-browser-verification") || html.includes("verify you are human") || html.includes("just a moment")) {
-						return true;
-					}
-					return document.querySelectorAll("article").length > 0 || document.querySelector("nav.mpp-toc") !== null;
+					// Check for actual yaoi content
+					return document.querySelectorAll("article").length > 0 ||
+						   document.querySelector("nav.mpp-toc") !== null ||
+						   document.querySelectorAll("h2.entry-title").length > 0 ||
+						   document.querySelector("div.entry-content") !== null;
 				};
 				return new Promise(resolve => {
 					const finish = () => {
 						resolve(document.documentElement ? document.documentElement.outerHTML : "");
 					};
 					const waitForContent = (start) => {
-						if (hasContent() || Date.now() - start > 3500) {
+						if (hasYaoiContent() || Date.now() - start > 3500) {
 							finish();
 						} else {
 							setTimeout(() => waitForContent(start), 150);
@@ -384,38 +390,46 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 		""".trimIndent()
 
 		val html = context.evaluateJs(url, script) ?: return null
-		if (html.isBlank() || isCloudflareHtml(html)) {
+		if (html.isBlank()) {
 			return null
 		}
+
 		val doc = Jsoup.parse(html, url)
-		return doc.takeUnless { it.isCloudflareChallenge() }
+
+		// Check for successful YaoiMangaOnline content first
+		if (hasValidYaoiContent(doc)) {
+			return doc
+		}
+
+		// Only reject if it's clearly an active Cloudflare challenge
+		if (isActiveCloudflareChallenge(html)) {
+			return null
+		}
+
+		// If we're not sure, allow the page through
+		return doc
 	}
 
-	private fun isCloudflareHtml(html: String): Boolean {
-		if (html.length < 200) {
+	private fun hasValidYaoiContent(doc: Document): Boolean {
+		// Check for YaoiMangaOnline-specific content that indicates successful load
+		return doc.select("article").isNotEmpty() ||
+			doc.select("h2.entry-title").isNotEmpty() ||
+			doc.select("nav.mpp-toc").isNotEmpty() ||
+			doc.select("div.entry-content").isNotEmpty() ||
+			doc.select("a[rel='tag']").isNotEmpty() ||
+			doc.title().contains("yaoi", ignoreCase = true)
+	}
+
+	private fun isActiveCloudflareChallenge(html: String): Boolean {
+		if (html.length < 100) {
 			return true
 		}
 		val lower = html.lowercase(Locale.US)
-		return lower.contains("cf-browser-verification") ||
-			lower.contains("checking if the site connection is secure") ||
-			lower.contains("checking your browser before accessing") ||
-			lower.contains("cf-chl") ||
-			lower.contains("cf-turnstile") ||
-			(lower.contains("cloudflare") && lower.contains("captcha"))
-	}
-
-	private fun Document.isCloudflareChallenge(): Boolean {
-		val title = title().lowercase(Locale.US)
-		if (title.contains("just a moment") || title.contains("attention required")) {
-			return true
-		}
-		val bodyHtml = body().html().lowercase(Locale.US)
-		return bodyHtml.contains("cf-browser-verification") ||
-			bodyHtml.contains("checking if the site connection is secure") ||
-			bodyHtml.contains("cf-chl") ||
-			bodyHtml.contains("cf-turnstile") ||
-			bodyHtml.contains("verify you are human") ||
-			bodyHtml.contains("cloudflare");
+		// Only reject pages that are clearly active challenge pages
+		return (lower.contains("just a moment") && lower.contains("cloudflare")) ||
+			(lower.contains("checking your browser") && lower.contains("cloudflare")) ||
+			lower.contains("cf-browser-verification") ||
+			lower.contains("cf-chl-opt")
 	}
 
 	private fun Element.resolveImageUrl(): String? {

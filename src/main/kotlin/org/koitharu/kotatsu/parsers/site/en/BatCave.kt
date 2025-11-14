@@ -1,6 +1,7 @@
 package org.koitharu.kotatsu.parsers.site.en
 
 import org.json.JSONObject
+import org.koitharu.kotatsu.parsers.Broken
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
@@ -15,6 +16,7 @@ import org.koitharu.kotatsu.parsers.util.suspendlazy.suspendLazy
 import java.text.SimpleDateFormat
 import java.util.*
 
+@Broken
 @MangaSourceParser("BATCAVE", "BatCave", "en", ContentType.COMICS)
 internal class BatCave(context: MangaLoaderContext) :
 	PagedMangaParser(context, MangaParserSource.BATCAVE, 20) {

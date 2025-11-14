@@ -1,7 +1,6 @@
 package org.koitharu.kotatsu.parsers.site.madara.fr
 
 import org.jsoup.nodes.Document
-import org.koitharu.kotatsu.parsers.Broken
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.model.ContentRating
@@ -32,16 +31,15 @@ import org.koitharu.kotatsu.parsers.util.toAbsoluteUrl
 import org.koitharu.kotatsu.parsers.util.toTitleCase
 import org.koitharu.kotatsu.parsers.util.urlEncoded
 import java.text.SimpleDateFormat
-import java.util.Base64
 import java.util.Calendar
 import java.util.EnumSet
 import java.util.Locale
 
-@Broken("Needs to be fixed.")
 @MangaSourceParser("RAIJINSCANS", "RaijinScans", "fr")
 internal class RaijinScans(context: MangaLoaderContext) :
 	MadaraParser(context, MangaParserSource.RAIJINSCANS, "raijin-scans.fr", 21) {
 
+	private val descriptionScriptRegex = """content\.innerHTML = `([\s\S]+?)`;""".toRegex()
 	override val datePattern = "dd/MM/yyyy"
 	override val withoutAjax = true
 	override val listUrl = ""
@@ -158,7 +156,9 @@ internal class RaijinScans(context: MangaLoaderContext) :
 
 		val author = doc.selectFirst("div.stat-item:has(span:contains(Auteur)) span.stat-value")?.text()
 
-		val description = doc.selectFirst(selectDesc)?.text()
+		val scriptDescription = doc.select("script:containsData(content.innerHTML)")
+			.firstNotNullOfOrNull { descriptionScriptRegex.find(it.data())?.groupValues?.get(1)?.trim() }
+		val description = scriptDescription ?: doc.selectFirst(selectDesc)?.text()
 
 		val genres = doc.select(selectGenre).mapNotNullToSet { a ->
 			val href = a.attr("href")
@@ -224,7 +224,7 @@ internal class RaijinScans(context: MangaLoaderContext) :
 
 		return doc.select(selectPage).map { element ->
 			val encodedUrl = element.attr("data-src")
-			val imageUrl = String(Base64.getDecoder().decode(encodedUrl))
+			val imageUrl = String(context.decodeBase64(encodedUrl))
 
 			MangaPage(
 				id = generateUid(imageUrl),

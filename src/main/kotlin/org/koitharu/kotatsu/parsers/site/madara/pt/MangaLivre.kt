@@ -62,14 +62,23 @@ internal class MangaLivre(context: MangaLoaderContext) :
             val doc = Jsoup.parse(html, initialUrl)
             println("DEBUG: Captured ${html.length} chars for $initialUrl")
 
+            // Debug what's actually in the HTML
+            val title = doc.title()
+            val bodyText = doc.body()?.text()?.take(200) ?: "no body"
+            println("DEBUG: Page title: '$title'")
+            println("DEBUG: Body preview: '$bodyText'")
+
             // Check for valid content
             if (hasValidMangaLivreContent(doc)) {
                 println("DEBUG: Found valid MangaLivre content")
                 return doc
             }
 
-            // Check if it's a Cloudflare challenge
-            if (!isActiveCloudflareChallenge(html) && html.length > 1000) {
+            // More thorough Cloudflare detection
+            val isCloudflare = isActiveCloudflareChallenge(html)
+            println("DEBUG: Cloudflare challenge detected: $isCloudflare")
+
+            if (!isCloudflare && html.length > 1000) {
                 println("DEBUG: Accepting substantial non-Cloudflare content")
                 return doc
             }

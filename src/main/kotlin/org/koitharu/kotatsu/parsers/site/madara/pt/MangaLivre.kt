@@ -216,10 +216,36 @@ internal class MangaLivre(context: MangaLoaderContext) :
     }
 
     override fun parseMangaList(doc: Document): List<Manga> {
-        val items = doc.select(".search-lists .manga__item, .page-content-listing .manga__item")
-            .ifEmpty { doc.select(".manga__item") }
+        // Try multiple selector combinations
+        var items = doc.select(".search-lists .manga__item")
+        println("DEBUG: Found ${items.size} items with .search-lists .manga__item")
 
-        println("DEBUG: Found ${items.size} manga items with selectors")
+        if (items.isEmpty()) {
+            items = doc.select(".page-content-listing .manga__item")
+            println("DEBUG: Found ${items.size} items with .page-content-listing .manga__item")
+        }
+
+        if (items.isEmpty()) {
+            items = doc.select("div.manga__item")
+            println("DEBUG: Found ${items.size} items with div.manga__item")
+        }
+
+        if (items.isEmpty()) {
+            // Debug what containers exist
+            val searchLists = doc.select(".search-lists")
+            val pageContent = doc.select(".page-content-listing")
+            val allMangaItems = doc.select(".manga__item")
+            println("DEBUG: Found ${searchLists.size} .search-lists containers")
+            println("DEBUG: Found ${pageContent.size} .page-content-listing containers")
+            println("DEBUG: Found ${allMangaItems.size} total .manga__item elements")
+
+            if (allMangaItems.isNotEmpty()) {
+                items = allMangaItems
+                println("DEBUG: Using all .manga__item elements")
+            }
+        }
+
+        println("DEBUG: Final count: ${items.size} manga items")
         if (items.isEmpty()) {
             println("DEBUG: No items found, falling back to super.parseMangaList")
             return super.parseMangaList(doc)

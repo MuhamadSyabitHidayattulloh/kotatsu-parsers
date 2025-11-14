@@ -215,8 +215,7 @@ internal class Mangataro(context: MangaLoaderContext) :
 	private suspend fun captureChapterRequestUrl(detailUrl: String, mangaId: String): String? {
 		// Trigger the client-side tab to fire its AJAX call and grab the signed endpoint.
 		val filterScript = """
-			const target = 'manga_id=$mangaId';
-			return url.includes('/auth/manga-chapters?') && url.includes(target);
+			return url.includes('/auth/manga-chapters?') && url.includes('manga_id=$mangaId');
 		""".trimIndent()
 		val config = InterceptionConfig(
 			timeoutMs = 8000L,

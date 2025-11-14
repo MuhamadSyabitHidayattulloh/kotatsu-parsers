@@ -33,31 +33,23 @@ internal class MangaLivre(context: MangaLoaderContext) :
         timeoutMs: Long = 15000L,
         allowBrowserAction: Boolean = true,
     ): Document {
-        println("DEBUG: captureDocument loading $initialUrl with captureWebViewUrls")
+        println("DEBUG: captureDocument loading $initialUrl with evaluateJs (redirects enabled)")
 
-        // First, load the webview and let it handle redirects
-        val capturedUrls = try {
-            context.captureWebViewUrls(
-                pageUrl = initialUrl,
-                urlPattern = captureAllPattern,
-                timeout = timeoutMs
-            )
-        } catch (e: Exception) {
-            println("ERROR: captureWebViewUrls failed for $initialUrl (${e.message})")
-            throw ParseException("Failed to capture webview URLs", initialUrl, e)
-        }
-
-        println("DEBUG: Captured ${capturedUrls.size} URLs from WebView")
-
-        // Now get the HTML content from the loaded page
+        // Simple script that waits for page to load and returns HTML
         val script = """
-            document.documentElement ? document.documentElement.outerHTML : "";
+            (() => {
+                return new Promise(resolve => {
+                    setTimeout(() => {
+                        resolve(document.documentElement ? document.documentElement.outerHTML : "");
+                    }, 8000);
+                });
+            })();
         """.trimIndent()
 
         val html = try {
             context.evaluateJs(initialUrl, script)
         } catch (e: Exception) {
-            println("ERROR: evaluateJs failed after captureWebViewUrls for $initialUrl (${e.message})")
+            println("ERROR: evaluateJs failed for $initialUrl (${e.message})")
             null
         }
 

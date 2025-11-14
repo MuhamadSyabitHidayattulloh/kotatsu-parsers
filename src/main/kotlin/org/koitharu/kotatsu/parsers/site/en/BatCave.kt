@@ -9,7 +9,6 @@ import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.core.PagedMangaParser
 import org.koitharu.kotatsu.parsers.exception.ParseException
 import org.koitharu.kotatsu.parsers.model.*
-import org.koitharu.kotatsu.parsers.network.CloudFlareHelper
 import org.koitharu.kotatsu.parsers.util.*
 import org.koitharu.kotatsu.parsers.util.json.getFloatOrDefault
 import org.koitharu.kotatsu.parsers.util.json.getStringOrNull
@@ -55,7 +54,10 @@ internal class BatCave(context: MangaLoaderContext) :
 		timeoutMs: Long = 15000L,
 		allowBrowserAction: Boolean = true,
 	): Document {
-		tryHttpDocument(initialUrl)?.let { doc ->
+		// Skip HTTP attempts entirely - Cloudflare protects all pages
+		// Go directly to WebView for all requests
+
+		loadDocumentViaWebView(initialUrl)?.let { doc ->
 			return doc
 		}
 
@@ -81,10 +83,6 @@ internal class BatCave(context: MangaLoaderContext) :
 
 		val finalUrl = resolvedUrl ?: initialUrl
 
-		tryHttpDocument(finalUrl)?.let { doc ->
-			return doc
-		}
-
 		loadDocumentViaWebView(finalUrl)?.let { doc ->
 			return doc
 		}
@@ -97,21 +95,6 @@ internal class BatCave(context: MangaLoaderContext) :
 		throw ParseException("Failed to load page via webview", finalUrl)
 	}
 
-	private suspend fun tryHttpDocument(url: String): Document? {
-		val response = runCatching { webClient.httpGet(url) }.getOrNull() ?: return null
-		response.use { res ->
-			val protection = CloudFlareHelper.checkResponseForProtection(res.copy())
-			if (protection != CloudFlareHelper.PROTECTION_NOT_DETECTED) {
-				return null
-			}
-			val doc = res.parseHtml()
-			val html = doc.outerHtml()
-			if (isCloudflareHtml(html)) {
-				return null
-			}
-			return doc
-		}
-	}
 
 	private suspend fun loadDocumentViaWebView(url: String): Document? {
 		val script = """

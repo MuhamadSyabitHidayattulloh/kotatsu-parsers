@@ -65,8 +65,10 @@ internal class MangaLivre(context: MangaLoaderContext) :
             // Debug what's actually in the HTML
             val title = doc.title()
             val bodyText = doc.body()?.text()?.take(200) ?: "no body"
+            val htmlPreview = html.take(300)
             println("DEBUG: Page title: '$title'")
             println("DEBUG: Body preview: '$bodyText'")
+            println("DEBUG: Raw HTML preview: '$htmlPreview'")
 
             // Check for valid content
             if (hasValidMangaLivreContent(doc)) {

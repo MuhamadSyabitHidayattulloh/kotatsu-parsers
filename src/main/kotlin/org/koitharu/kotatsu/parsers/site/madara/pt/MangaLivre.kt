@@ -37,25 +37,7 @@ internal class MangaLivre(context: MangaLoaderContext) :
 
         // Script that waits for page to load fully and returns HTML
         val script = """
-            (() => {
-                return new Promise(resolve => {
-                    const finish = () => {
-                        resolve(document.documentElement ? document.documentElement.outerHTML : "");
-                    };
-
-                    // Wait for page to be ready, then wait a bit more
-                    if (document.readyState === "complete") {
-                        setTimeout(finish, 3000); // Wait 3 seconds after complete
-                    } else {
-                        window.addEventListener("load", () => {
-                            setTimeout(finish, 3000); // Wait 3 seconds after load
-                        }, { once: true });
-                    }
-
-                    // Fallback timeout
-                    setTimeout(finish, 10000); // 10 second max
-                });
-            })();
+        document.documentElement ? document.documentElement.outerHTML : "";
         """.trimIndent()
 
         val html = try {
@@ -242,14 +224,14 @@ internal class MangaLivre(context: MangaLoaderContext) :
         }
 
         return items.mapNotNull { item ->
-            val link = item.selectFirst(".manga__thumb a[href], .post-title a[href], a[href]")
+            val link = item.selectFirst(".manga__thumb_item a[href], .manga__thumb a[href], .post-title a[href], a[href]")
                 ?: return@mapNotNull null
             val href = link.attrAsRelativeUrlOrNull("href") ?: link.attr("href")
             if (href.isBlank()) {
                 return@mapNotNull null
             }
 
-            val title = item.selectFirst(".post-title a")?.text()?.trim()?.takeUnless { it.isEmpty() }
+            val title = item.selectFirst(".post-title h2 a, .post-title a")?.text()?.trim()?.takeUnless { it.isEmpty() }
                 ?: link.attr("title").trim().takeUnless { it.isEmpty() }
                 ?: link.text().trim().takeUnless { it.isEmpty() }
 

@@ -219,13 +219,18 @@ internal class MangaLivre(context: MangaLoaderContext) :
         val items = doc.select(".search-lists .manga__item, .page-content-listing .manga__item")
             .ifEmpty { doc.select(".manga__item") }
 
+        println("DEBUG: Found ${items.size} manga items with selectors")
         if (items.isEmpty()) {
+            println("DEBUG: No items found, falling back to super.parseMangaList")
             return super.parseMangaList(doc)
         }
 
-        return items.mapNotNull { item ->
+        val results = items.mapNotNull { item ->
             val link = item.selectFirst(".manga__thumb_item a[href], .manga__thumb a[href], .post-title a[href], a[href]")
-                ?: return@mapNotNull null
+            if (link == null) {
+                println("DEBUG: No link found in item: ${item.html().take(200)}")
+                return@mapNotNull null
+            }
             val href = link.attrAsRelativeUrlOrNull("href") ?: link.attr("href")
             if (href.isBlank()) {
                 return@mapNotNull null
@@ -243,7 +248,7 @@ internal class MangaLivre(context: MangaLoaderContext) :
                 title = title ?: href,
                 altTitles = emptySet(),
                 rating = RATING_UNKNOWN,
-                tags = item.select(".manga-genres a").mapNotNullToSet { a ->
+                tags = item.select(".manga-genres a, span.manga-genres a").mapNotNullToSet { a ->
                     val slug = a.attr("href").removeSuffix('/').substringAfterLast('/')
                     if (slug.isEmpty()) {
                         return@mapNotNullToSet null
@@ -264,6 +269,9 @@ internal class MangaLivre(context: MangaLoaderContext) :
                 contentRating = if (isNsfwSource) ContentRating.ADULT else null,
             )
         }
+
+        println("DEBUG: Parsed ${results.size} manga from ${items.size} items")
+        return results
     }
 
     override suspend fun getRelatedManga(seed: Manga): List<Manga> {

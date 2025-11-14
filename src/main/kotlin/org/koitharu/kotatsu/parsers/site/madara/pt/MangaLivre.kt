@@ -35,13 +35,27 @@ internal class MangaLivre(context: MangaLoaderContext) :
     ): Document {
         println("DEBUG: captureDocument loading $initialUrl with evaluateJs (redirects enabled)")
 
-        // Script that only returns when we have ACTUAL manga content, not just basic page elements
+        // Script that detects different page types and returns when content is loaded
         val script = """
             (() => {
-                // Only return when we have actual manga items with content
+                // Check for manga list content (search/browse pages)
                 const mangaItems = document.querySelectorAll('.manga__item');
-                const hasMangaContent = mangaItems.length > 3 &&
-                                      document.querySelectorAll('.manga__item img').length > 0;
+                const hasMangaListContent = mangaItems.length > 3 &&
+                                          document.querySelectorAll('.manga__item img').length > 0;
+
+                // Check for manga details page content
+                const hasMangaDetailsContent = document.querySelector('h1') &&
+                                             document.querySelectorAll('.wp-manga-chapter').length > 0 &&
+                                             document.querySelector('.summary-content');
+
+                // Check for chapter/reader page content
+                const hasChapterContent = document.querySelectorAll('.wp-manga-chapter-img').length > 0 ||
+                                         document.querySelectorAll('.page-break').length > 0 ||
+                                         document.querySelector('.reading-content');
+
+                // Check for tags/genre page content
+                const hasTagsContent = document.querySelectorAll('.genres-content a').length > 5 ||
+                                      document.querySelectorAll('.second-menu li').length > 5;
 
                 // Check for serious Cloudflare challenges only
                 const bodyText = document.body.textContent.toLowerCase();
@@ -49,12 +63,15 @@ internal class MangaLivre(context: MangaLoaderContext) :
                                              bodyText.includes('just a moment') ||
                                              document.querySelector('.cf-browser-verification') !== null;
 
-                // Only return if we have REAL content or confirmed Cloudflare
-                if (hasMangaContent || hasCloudflareChallenge) {
+                // Return if we have any type of real content or Cloudflare
+                const hasValidContent = hasMangaListContent || hasMangaDetailsContent ||
+                                      hasChapterContent || hasTagsContent;
+
+                if (hasValidContent || hasCloudflareChallenge) {
                     return document.documentElement ? document.documentElement.outerHTML : "";
                 }
 
-                // Return null to continue waiting (let evaluateJs wait longer)
+                // Return null to continue waiting
                 return null;
             })();
         """.trimIndent()

@@ -31,6 +31,7 @@ import org.koitharu.kotatsu.parsers.util.parseHtml
 import org.koitharu.kotatsu.parsers.util.parseRaw
 import org.koitharu.kotatsu.parsers.util.toAbsoluteUrl
 import org.koitharu.kotatsu.parsers.util.toRelativeUrl
+import org.koitharu.kotatsu.parsers.webview.InterceptionConfig
 import java.util.ArrayList
 import java.util.Calendar
 import java.util.EnumSet
@@ -86,6 +87,33 @@ internal class Mangataro(context: MangaLoaderContext) :
 			tag("220", "Web Comic"),
 		)
 	}
+
+	private val chapterTabScript = """
+		(() => {
+			const trigger = () => {
+				const tab = document.querySelector('[data-tab-target="#tab-chapters"]');
+				if (!tab) {
+					return false;
+				}
+				if (typeof tab.click === 'function') {
+					tab.click();
+				}
+				tab.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+				return true;
+			};
+			if (trigger()) {
+				return;
+			}
+			let attempts = 0;
+			const timer = setInterval(() => {
+				attempts += 1;
+				if (trigger() || attempts > 20) {
+					clearInterval(timer);
+				}
+			}, 150);
+			setTimeout(() => clearInterval(timer), 4000);
+		})();
+	""".trimIndent()
 
 	override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
 		super.onCreateConfig(keys)
@@ -159,14 +187,10 @@ internal class Mangataro(context: MangaLoaderContext) :
 	}
 
 	private suspend fun loadChapters(mangaId: String, referer: String): List<MangaChapter> {
-		val url = buildString {
-			append("https://")
-			append(domain)
-			append("/auth/manga-chapters?manga_id=")
-			append(mangaId)
-			append("&offset=0&limit=500&order=DESC")
-		}
-		val raw = webClient.httpGet(url, Headers.headersOf("Referer", referer)).parseRaw().trim()
+		val requestUrl = captureChapterRequestUrl(referer, mangaId)
+			?: throw ParseException("Unable to capture chapter list endpoint", referer)
+		val absoluteUrl = if (requestUrl.startsWith("http")) requestUrl else "https://$domain$requestUrl"
+		val raw = webClient.httpGet(absoluteUrl, Headers.headersOf("Referer", referer)).parseRaw().trim()
 		if (raw.isEmpty()) {
 			return emptyList()
 		}
@@ -186,6 +210,27 @@ internal class Mangataro(context: MangaLoaderContext) :
 			result.add(item.toMangaChapter(fallbackNumber))
 		}
 		return result
+	}
+
+	private suspend fun captureChapterRequestUrl(detailUrl: String, mangaId: String): String? {
+		// Trigger the client-side tab to fire its AJAX call and grab the signed endpoint.
+		val filterScript = """
+			const target = 'manga_id=$mangaId';
+			return url.includes('/auth/manga-chapters?') && url.includes(target);
+		""".trimIndent()
+		val config = InterceptionConfig(
+			timeoutMs = 8000L,
+			pageScript = chapterTabScript,
+			filterScript = filterScript,
+			maxRequests = 1,
+		)
+		val intercepted = runCatching {
+			context.interceptWebViewRequests(
+				url = detailUrl,
+				config = config,
+			)
+		}.getOrNull().orEmpty()
+		return intercepted.firstOrNull()?.url
 	}
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
@@ -498,7 +543,7 @@ internal class Mangataro(context: MangaLoaderContext) :
 		return builder.toString()
 	}
 
-	private fun tag(id: String, title: String) = MangaTag(id, title, source)
+	private fun tag(id: String, title: String) = MangaTag(title = title, key = id, source = source)
 
 	private fun Element.findSiblingText(): String? {
 		nextElementSibling()?.text()?.nullIfEmpty()?.let { return it }

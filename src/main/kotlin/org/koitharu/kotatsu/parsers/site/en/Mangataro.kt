@@ -299,8 +299,15 @@ internal class Mangataro(context: MangaLoaderContext) :
 
 	private fun JSONObject.toMangaChapter(fallbackNumber: Float): MangaChapter {
 		val chapterUrl = optString("url")
-		val title = optString("title").nullIfEmpty()
-		val number = chapterNumberRegex.find(optString("chapter"))?.value?.toFloatOrNull()
+		val rawChapter = optString("chapter")
+		val chapterLabel = rawChapter.nullIfEmpty() ?: fallbackNumber.toChapterLabel()
+		val rawTitle = optString("title").trim()
+		val title = when {
+			rawTitle.equals("N/A", ignoreCase = true) -> "Chapter $chapterLabel"
+			rawTitle.isEmpty() -> null
+			else -> rawTitle
+		}
+		val number = chapterNumberRegex.find(rawChapter)?.value?.toFloatOrNull()
 		return MangaChapter(
 			id = generateUid(chapterUrl),
 			title = title,
@@ -312,6 +319,22 @@ internal class Mangataro(context: MangaLoaderContext) :
 			branch = null,
 			source = source,
 		)
+	}
+
+	private fun Float.toChapterLabel(): String = if (this % 1f == 0f) {
+		toInt().toString()
+	} else {
+		replaceTrailingZeros()
+	}
+
+	private fun Float.replaceTrailingZeros(): String {
+		val text = toString()
+		val trimmed = text.trimEnd('0')
+		return if (trimmed.endsWith('.')) {
+			trimmed.dropLast(1)
+		} else {
+			trimmed
+		}
 	}
 
 	private fun String?.toMangaState(): MangaState? {

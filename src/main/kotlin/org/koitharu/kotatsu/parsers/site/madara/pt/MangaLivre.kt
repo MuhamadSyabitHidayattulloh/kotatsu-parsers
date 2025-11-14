@@ -37,17 +37,18 @@ internal class MangaLivre(context: MangaLoaderContext) :
 
         // Simple script that waits for page to load and returns HTML
         val script = """
-            (() => {
-                return new Promise(resolve => {
-                    setTimeout(() => {
-                        resolve(document.documentElement ? document.documentElement.outerHTML : "");
-                    }, 8000);
-                });
-            })();
+        document.documentElement ? document.documentElement.outerHTML : "";
         """.trimIndent()
 
         val html = try {
-            context.evaluateJs(initialUrl, script)
+            context.evaluateJs(initialUrl, script)?.let { raw ->
+                // Remove surrounding quotes if present
+                if (raw.startsWith("\"") && raw.endsWith("\"")) {
+                    raw.substring(1, raw.length - 1)
+                        .replace("\\\"", "\"")
+                        .replace("\\n", "\n")
+                } else raw
+            }
         } catch (e: Exception) {
             println("ERROR: evaluateJs failed for $initialUrl (${e.message})")
             null

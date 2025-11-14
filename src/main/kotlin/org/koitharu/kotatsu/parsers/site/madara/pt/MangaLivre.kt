@@ -35,9 +35,31 @@ internal class MangaLivre(context: MangaLoaderContext) :
     ): Document {
         println("DEBUG: captureDocument loading $initialUrl with evaluateJs (redirects enabled)")
 
-        // Script that waits for page to load fully and returns HTML
+        // Script that detects MangaLivre content or Cloudflare challenges for faster response
         val script = """
-        document.documentElement ? document.documentElement.outerHTML : "";
+            (() => {
+                // Check for MangaLivre content
+                const hasMangaContent = document.querySelectorAll('.manga__item').length > 0 ||
+                                      document.querySelectorAll('.search-lists').length > 0 ||
+                                      document.querySelectorAll('.page-content-listing').length > 0 ||
+                                      document.querySelectorAll('.genres_wrap').length > 0 ||
+                                      document.title.toLowerCase().includes('manga livre');
+
+                // Check for Cloudflare challenge
+                const hasCloudflareChallenge = document.body.textContent.includes('Checking your browser') ||
+                                             document.body.textContent.includes('Just a moment') ||
+                                             document.body.textContent.includes('Please wait') ||
+                                             document.querySelector('.cf-browser-verification') !== null ||
+                                             document.querySelector('[id*="challenge"]') !== null;
+
+                // Return HTML immediately if we detect content or Cloudflare
+                if (hasMangaContent || hasCloudflareChallenge) {
+                    return document.documentElement ? document.documentElement.outerHTML : "";
+                }
+
+                // Return null to continue waiting (evaluateJs will handle timing)
+                return null;
+            })();
         """.trimIndent()
 
         val html = try {

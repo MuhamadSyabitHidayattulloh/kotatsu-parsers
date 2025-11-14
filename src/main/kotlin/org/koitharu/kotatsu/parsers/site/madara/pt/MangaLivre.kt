@@ -96,55 +96,21 @@ internal class MangaLivre(context: MangaLoaderContext) :
         val script = """
             (() => {
                 return new Promise(resolve => {
-                    let attempts = 0;
-                    const maxAttempts = 50; // 10 seconds max
-
-                    const checkForContent = () => {
-                        attempts++;
-
-                        // Check if we have meaningful content
-                        const hasContent = document.body && (
-                            document.body.textContent.length > 1000 ||
-                            document.querySelectorAll('.manga__item').length > 0 ||
-                            document.querySelectorAll('.search-lists').length > 0 ||
-                            document.querySelectorAll('.page-content-listing').length > 0
-                        );
-
-                        // Check if Cloudflare is still processing
-                        const isCloudflareActive = document.body && (
-                            document.body.textContent.includes('Checking your browser') ||
-                            document.body.textContent.includes('Just a moment') ||
-                            document.querySelector('.cf-browser-verification') !== null
-                        );
-
-                        if (hasContent) {
-                            // Found real content, return it
-                            resolve(document.documentElement.outerHTML);
-                        } else if (isCloudflareActive && attempts < maxAttempts) {
-                            // Cloudflare is still working, wait more
-                            setTimeout(checkForContent, 200);
-                        } else if (attempts >= maxAttempts) {
-                            // Timeout, return what we have
-                            resolve(document.documentElement ? document.documentElement.outerHTML : "");
-                        } else {
-                            // No content yet, wait a bit more
-                            setTimeout(checkForContent, 200);
-                        }
+                    const finish = () => {
+                        resolve(document.documentElement ? document.documentElement.outerHTML : "");
                     };
 
-                    // Start checking after initial load
+                    // Wait for page to be ready, then wait a bit more
                     if (document.readyState === "complete") {
-                        setTimeout(checkForContent, 1000);
+                        setTimeout(finish, 5000); // Wait 5 seconds after complete
                     } else {
                         window.addEventListener("load", () => {
-                            setTimeout(checkForContent, 1000);
+                            setTimeout(finish, 5000); // Wait 5 seconds after load
                         }, { once: true });
                     }
 
                     // Fallback timeout
-                    setTimeout(() => {
-                        resolve(document.documentElement ? document.documentElement.outerHTML : "");
-                    }, 15000);
+                    setTimeout(finish, 20000); // 20 second max
                 });
             })();
         """.trimIndent()
@@ -156,22 +122,27 @@ internal class MangaLivre(context: MangaLoaderContext) :
         }
 
         val doc = Jsoup.parse(html, url)
-        println("DEBUG: loadDocumentViaWebView parsed HTML length=${doc.outerHtml().length} for $url")
+        println("DEBUG: loadDocumentViaWebView parsed HTML length=${html.length} for $url")
 
-        // Check for successful MangaLivre content first
-        if (hasValidMangaLivreContent(doc)) {
-            println("DEBUG: Found valid MangaLivre content for $url")
-            return doc
-        }
-
-        // Only reject if it's clearly an active Cloudflare challenge AND we got very little HTML
-        if (html.length < 1000 && isActiveCloudflareChallenge(html)) {
-            println("WARN: evaluateJs returned active Cloudflare challenge for $url")
+        // Only reject if it's clearly an active Cloudflare challenge AND very small
+        if (html.length < 500 && isActiveCloudflareChallenge(html)) {
+            println("WARN: evaluateJs returned active Cloudflare challenge for $url (${html.length} chars)")
             return null
         }
 
-        // If we got a reasonable amount of HTML, allow it through
-        println("DEBUG: Allowing page through for $url (${html.length} chars)")
+        // Accept any reasonable amount of content - let the parser handle validation
+        if (html.length > 1000) {
+            println("DEBUG: Accepting content for $url (${html.length} chars)")
+            return doc
+        }
+
+        // Even small content might be valid - only reject if it's clearly broken
+        if (html.length < 100) {
+            println("WARN: Very small content received for $url (${html.length} chars), rejecting")
+            return null
+        }
+
+        println("DEBUG: Accepting small but potentially valid content for $url (${html.length} chars)")
         return doc
     }
 

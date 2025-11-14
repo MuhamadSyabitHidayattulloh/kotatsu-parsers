@@ -1,5 +1,7 @@
 package org.koitharu.kotatsu.parsers.site.en
 
+import okhttp3.Interceptor
+import okhttp3.Response
 import org.json.JSONObject
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
@@ -23,9 +25,29 @@ internal class BatCave(context: MangaLoaderContext) :
 
 	override val configKeyDomain = ConfigKey.Domain("batcave.biz")
 
-    override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()
-        .add("Referer", "https://$domain/")
-        .build()
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val request = chain.request()
+        val url = request.url.toString()
+
+        val headersBuilder = request.headers.newBuilder()
+
+        // Set appropriate Referer based on the URL
+        headersBuilder.removeAll("Referer")
+        when {
+            url.contains("readcomicsonline.ru") -> {
+                headersBuilder.add("Referer", "https://readcomicsonline.ru/")
+            }
+            else -> {
+                headersBuilder.add("Referer", "https://$domain/")
+            }
+        }
+
+        val newRequest = request.newBuilder()
+            .headers(headersBuilder.build())
+            .build()
+
+        return chain.proceed(newRequest)
+    }
 
 	private val availableTags = suspendLazy(initializer = ::fetchTags)
 	private val captureAllPattern = Regex(".*")

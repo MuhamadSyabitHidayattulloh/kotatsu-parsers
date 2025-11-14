@@ -27,6 +27,14 @@ internal class BatCave(context: MangaLoaderContext) :
         .add("Referer", "https://$domain/")
         .build()
 
+	override fun getImageRequestHeaders(url: String) = super.getImageRequestHeaders(url).newBuilder()
+		.removeAll("Referer")
+		.add("Referer", when {
+			url.contains("readcomicsonline.ru") -> "https://readcomicsonline.ru/"
+			else -> "https://$domain/"
+		})
+		.build()
+
 	private val availableTags = suspendLazy(initializer = ::fetchTags)
 	private val captureAllPattern = Regex(".*")
 

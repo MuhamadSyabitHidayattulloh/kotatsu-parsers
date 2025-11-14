@@ -96,15 +96,55 @@ internal class MangaLivre(context: MangaLoaderContext) :
         val script = """
             (() => {
                 return new Promise(resolve => {
-                    const finish = () => {
-                        resolve(document.documentElement ? document.documentElement.outerHTML : "");
+                    let attempts = 0;
+                    const maxAttempts = 50; // 10 seconds max
+
+                    const checkForContent = () => {
+                        attempts++;
+
+                        // Check if we have meaningful content
+                        const hasContent = document.body && (
+                            document.body.textContent.length > 1000 ||
+                            document.querySelectorAll('.manga__item').length > 0 ||
+                            document.querySelectorAll('.search-lists').length > 0 ||
+                            document.querySelectorAll('.page-content-listing').length > 0
+                        );
+
+                        // Check if Cloudflare is still processing
+                        const isCloudflareActive = document.body && (
+                            document.body.textContent.includes('Checking your browser') ||
+                            document.body.textContent.includes('Just a moment') ||
+                            document.querySelector('.cf-browser-verification') !== null
+                        );
+
+                        if (hasContent) {
+                            // Found real content, return it
+                            resolve(document.documentElement.outerHTML);
+                        } else if (isCloudflareActive && attempts < maxAttempts) {
+                            // Cloudflare is still working, wait more
+                            setTimeout(checkForContent, 200);
+                        } else if (attempts >= maxAttempts) {
+                            // Timeout, return what we have
+                            resolve(document.documentElement ? document.documentElement.outerHTML : "");
+                        } else {
+                            // No content yet, wait a bit more
+                            setTimeout(checkForContent, 200);
+                        }
                     };
+
+                    // Start checking after initial load
                     if (document.readyState === "complete") {
-                        setTimeout(finish, 200);
+                        setTimeout(checkForContent, 1000);
                     } else {
-                        window.addEventListener("load", () => setTimeout(finish, 200), { once: true });
+                        window.addEventListener("load", () => {
+                            setTimeout(checkForContent, 1000);
+                        }, { once: true });
                     }
-                    setTimeout(finish, 3000);
+
+                    // Fallback timeout
+                    setTimeout(() => {
+                        resolve(document.documentElement ? document.documentElement.outerHTML : "");
+                    }, 15000);
                 });
             })();
         """.trimIndent()
@@ -124,14 +164,14 @@ internal class MangaLivre(context: MangaLoaderContext) :
             return doc
         }
 
-        // Only reject if it's clearly an active Cloudflare challenge
-        if (isActiveCloudflareChallenge(html)) {
+        // Only reject if it's clearly an active Cloudflare challenge AND we got very little HTML
+        if (html.length < 1000 && isActiveCloudflareChallenge(html)) {
             println("WARN: evaluateJs returned active Cloudflare challenge for $url")
             return null
         }
 
-        // If we're not sure, allow the page through
-        println("DEBUG: Allowing uncertain page through for $url")
+        // If we got a reasonable amount of HTML, allow it through
+        println("DEBUG: Allowing page through for $url (${html.length} chars)")
         return doc
     }
 

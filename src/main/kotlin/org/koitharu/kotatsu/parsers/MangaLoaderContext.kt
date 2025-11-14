@@ -46,7 +46,7 @@ public abstract class MangaLoaderContext {
 	 * @param baseUrl url of page script will be executed in context of
 	 * @return execution result as string, may be null
 	 */
-	public abstract suspend fun evaluateJs(baseUrl: String, script: String): String?
+	public abstract suspend fun evaluateJs(baseUrl: String, script: String, timeout: Long): String?
 
 	/**
 	 * Open [url] in browser for some external action (e.g. captcha solving or non cookie-based authorization)

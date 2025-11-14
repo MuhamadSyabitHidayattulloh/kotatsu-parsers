@@ -389,7 +389,7 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 			})();
 		""".trimIndent()
 
-		val html = context.evaluateJs(url, script) ?: return null
+		val html = context.evaluateJs(url, script, timeout = 15000L) ?: return null
 		if (html.isBlank()) {
 			return null
 		}

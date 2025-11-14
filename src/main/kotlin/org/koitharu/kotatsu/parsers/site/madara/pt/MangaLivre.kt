@@ -77,7 +77,7 @@ internal class MangaLivre(context: MangaLoaderContext) :
         """.trimIndent()
 
         val html = try {
-            context.evaluateJs(initialUrl, script)?.let { raw ->
+            context.evaluateJs(initialUrl, script, timeout = timeoutMs)?.let { raw ->
                 // Remove surrounding quotes if present and decode escapes
                 val unquoted = if (raw.startsWith("\"") && raw.endsWith("\"")) {
                     raw.substring(1, raw.length - 1)
@@ -87,15 +87,11 @@ internal class MangaLivre(context: MangaLoaderContext) :
                         .replace("\\t", "\t")
                 } else raw
 
-                // Decode Unicode escapes like \u003C to <
-                var result = unquoted
-                val unicodePattern = Regex("""\\u([0-9A-Fa-f]{4})""")
-                unicodePattern.findAll(unquoted).forEach { match ->
+                // Decode Unicode escapes like \u003C to < more efficiently
+                unquoted.replace(Regex("""\\u([0-9A-Fa-f]{4})""")) { match ->
                     val hexValue = match.groupValues[1]
-                    val char = hexValue.toInt(16).toChar()
-                    result = result.replace(match.value, char.toString())
+                    hexValue.toInt(16).toChar().toString()
                 }
-                result
             }
         } catch (e: Exception) {
             println("ERROR: evaluateJs failed for $initialUrl (${e.message})")

@@ -42,14 +42,24 @@ internal class MangaLivre(context: MangaLoaderContext) :
 
         val html = try {
             context.evaluateJs(initialUrl, script)?.let { raw ->
-                // Remove surrounding quotes if present
-                if (raw.startsWith("\"") && raw.endsWith("\"")) {
+                // Remove surrounding quotes if present and decode escapes
+                val unquoted = if (raw.startsWith("\"") && raw.endsWith("\"")) {
                     raw.substring(1, raw.length - 1)
                         .replace("\\\"", "\"")
                         .replace("\\n", "\n")
                         .replace("\\r", "\r")
                         .replace("\\t", "\t")
                 } else raw
+
+                // Decode Unicode escapes like \u003C to <
+                var result = unquoted
+                val unicodePattern = Regex("""\\u([0-9A-Fa-f]{4})""")
+                unicodePattern.findAll(unquoted).forEach { match ->
+                    val hexValue = match.groupValues[1]
+                    val char = hexValue.toInt(16).toChar()
+                    result = result.replace(match.value, char.toString())
+                }
+                result
             }
         } catch (e: Exception) {
             println("ERROR: evaluateJs failed for $initialUrl (${e.message})")

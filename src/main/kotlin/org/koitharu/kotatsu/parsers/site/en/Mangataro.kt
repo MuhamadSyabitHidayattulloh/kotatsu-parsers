@@ -521,26 +521,29 @@ internal class Mangataro(context: MangaLoaderContext) :
 		if (isEmpty()) {
 			return "[]"
 		}
-		val builder = StringBuilder(size * 4)
-		builder.append('[')
-		var first = true
+		val ids = LinkedHashSet<String>(size)
 		for (tag in this) {
-			val key = tag.key ?: continue
-			if (!first) {
-				builder.append(',')
-			}
-			first = false
-			val numeric = key.toIntOrNull()
-			if (numeric != null) {
-				builder.append(numeric)
-			} else {
-				builder.append('"')
-				builder.append(key.replace("\"", "\\\""))
-				builder.append('"')
+			val numericKey = tag.key?.toIntOrNull()?.let { it.toString() }
+				?: genreTags.firstOrNull { ref ->
+					ref.title.equals(tag.title, ignoreCase = true)
+				}?.key?.toIntOrNull()?.let { it.toString() }
+			if (numericKey != null) {
+				ids.add(numericKey)
 			}
 		}
-		builder.append(']')
-		return builder.toString()
+		if (ids.isEmpty()) {
+			return "[]"
+		}
+		return buildString(ids.size * 4) {
+			append('[')
+			ids.forEachIndexed { index, value ->
+				if (index > 0) {
+					append(',')
+				}
+				append(value)
+			}
+			append(']')
+		}
 	}
 
 	private fun tag(id: String, title: String) = MangaTag(title = title, key = id, source = source)

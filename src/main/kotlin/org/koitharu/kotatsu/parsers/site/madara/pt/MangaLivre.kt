@@ -35,9 +35,27 @@ internal class MangaLivre(context: MangaLoaderContext) :
     ): Document {
         println("DEBUG: captureDocument loading $initialUrl with evaluateJs (redirects enabled)")
 
-        // Simple script that waits for page to load and returns HTML
+        // Script that waits for page to load fully and returns HTML
         val script = """
-        document.documentElement ? document.documentElement.outerHTML : "";
+            (() => {
+                return new Promise(resolve => {
+                    const finish = () => {
+                        resolve(document.documentElement ? document.documentElement.outerHTML : "");
+                    };
+
+                    // Wait for page to be ready, then wait a bit more
+                    if (document.readyState === "complete") {
+                        setTimeout(finish, 3000); // Wait 3 seconds after complete
+                    } else {
+                        window.addEventListener("load", () => {
+                            setTimeout(finish, 3000); // Wait 3 seconds after load
+                        }, { once: true });
+                    }
+
+                    // Fallback timeout
+                    setTimeout(finish, 10000); // 10 second max
+                });
+            })();
         """.trimIndent()
 
         val html = try {
@@ -47,6 +65,8 @@ internal class MangaLivre(context: MangaLoaderContext) :
                     raw.substring(1, raw.length - 1)
                         .replace("\\\"", "\"")
                         .replace("\\n", "\n")
+                        .replace("\\r", "\r")
+                        .replace("\\t", "\t")
                 } else raw
             }
         } catch (e: Exception) {

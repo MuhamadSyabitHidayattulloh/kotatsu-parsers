@@ -102,10 +102,19 @@ internal class BatCave(context: MangaLoaderContext) :
 		val response = runCatching { webClient.httpGet(url) }.getOrNull() ?: return null
 		return response.use { res ->
 			val doc = runCatching { res.parseHtml() }.getOrNull() ?: return null
+
+			// Check for successful BatCave content first
+			if (hasValidBatCaveContent(doc)) {
+				return doc
+			}
+
+			// Only reject if it's clearly an active Cloudflare challenge
 			val html = doc.outerHtml()
-			if (isCloudflareHtml(html)) {
+			if (isActiveCloudflareChallenge(html)) {
 				return null
 			}
+
+			// If we're not sure, allow the page through
 			doc
 		}
 	}

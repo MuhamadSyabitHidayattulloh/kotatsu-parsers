@@ -160,19 +160,30 @@ internal class RaijinScans(context: MangaLoaderContext) :
 			.firstNotNullOfOrNull { descriptionScriptRegex.find(it.data())?.groupValues?.get(1)?.trim() }
 		val description = scriptDescription ?: doc.selectFirst(selectDesc)?.text()
 
-		val genres = doc.select(selectGenre).mapNotNullToSet { a ->
-			val href = a.attr("href")
-			val genreSlug = href.substringAfter("/manga-genre/").substringBefore("/").toTitleCase()
-			val genreId = tagMap[genreSlug]
+		// Ensure tagMap is initialized
+		if (!::tagMap.isInitialized) {
+			val availableTags = fetchAvailableTags()
+			tagMap = availableTags.associateBy({ it.title }, { it.key })
+		}
 
-			if (genreId != null) {
-				MangaTag(
-					key = genreId,
-					title = a.text(),
-					source = source,
-				)
+		val genres = doc.select(selectGenre).mapNotNullToSet { a ->
+			val genreTitle = a.text().trim().toTitleCase()
+
+			if (genreTitle.isBlank()) {
+				null // Skip empty genres
 			} else {
-				error("Error: Genre '$genreSlug' from detail page not found in filter options map.")
+				val genreId = tagMap[genreTitle]
+
+				if (genreId != null) {
+					MangaTag(
+						key = genreId,
+						title = genreTitle,
+						source = source,
+					)
+				} else {
+					// Genre not found in filter options, skip it gracefully
+					null
+				}
 			}
 		}
 

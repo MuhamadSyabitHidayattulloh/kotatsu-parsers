@@ -31,7 +31,11 @@ import org.koitharu.kotatsu.parsers.util.parseHtml
 import org.koitharu.kotatsu.parsers.util.parseRaw
 import org.koitharu.kotatsu.parsers.util.toAbsoluteUrl
 import org.koitharu.kotatsu.parsers.util.toRelativeUrl
-import org.koitharu.kotatsu.parsers.webview.InterceptionConfig
+import okhttp3.HttpUrl
+import java.security.MessageDigest
+import java.time.ZoneOffset
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 import java.util.ArrayList
 import java.util.Calendar
 import java.util.EnumSet
@@ -46,6 +50,8 @@ internal class Mangataro(context: MangaLoaderContext) :
 	override val configKeyDomain = ConfigKey.Domain("mangataro.org")
 
 	private val chapterNumberRegex = Regex("""(\d+(?:\.\d+)?)""")
+
+	private val tokenFormatter = DateTimeFormatter.ofPattern("yyyyMMddHH", Locale.US)
 
 	private val genreTags by lazy {
 		setOf(
@@ -87,33 +93,6 @@ internal class Mangataro(context: MangaLoaderContext) :
 			tag("220", "Web Comic"),
 		)
 	}
-
-	private val chapterTabScript = """
-		(() => {
-			const trigger = () => {
-				const tab = document.querySelector('[data-tab-target="#tab-chapters"]');
-				if (!tab) {
-					return false;
-				}
-				if (typeof tab.click === 'function') {
-					tab.click();
-				}
-				tab.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-				return true;
-			};
-			if (trigger()) {
-				return;
-			}
-			let attempts = 0;
-			const timer = setInterval(() => {
-				attempts += 1;
-				if (trigger() || attempts > 20) {
-					clearInterval(timer);
-				}
-			}, 150);
-			setTimeout(() => clearInterval(timer), 4000);
-		})();
-	""".trimIndent()
 
 	override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
 		super.onCreateConfig(keys)
@@ -187,49 +166,92 @@ internal class Mangataro(context: MangaLoaderContext) :
 	}
 
 	private suspend fun loadChapters(mangaId: String, referer: String): List<MangaChapter> {
-		val requestUrl = captureChapterRequestUrl(referer, mangaId)
-			?: throw ParseException("Unable to capture chapter list endpoint", referer)
-		val absoluteUrl = if (requestUrl.startsWith("http")) requestUrl else "https://$domain$requestUrl"
-		val raw = webClient.httpGet(absoluteUrl, Headers.headersOf("Referer", referer)).parseRaw().trim()
-		if (raw.isEmpty()) {
-			return emptyList()
-		}
-		val json = runCatching { JSONObject(raw) }.getOrNull() ?: return emptyList()
-		if (!json.optBoolean("success", false)) {
-			return emptyList()
-		}
-		val chaptersArray = json.optJSONArray("chapters") ?: return emptyList()
-		val total = chaptersArray.length()
-		if (total == 0) {
-			return emptyList()
-		}
-		val result = ArrayList<MangaChapter>(total)
-		for (i in total - 1 downTo 0) {
-			val fallbackNumber = (total - i).toFloat()
-			val item = chaptersArray.getJSONObject(i)
-			result.add(item.toMangaChapter(fallbackNumber))
+		val headers = Headers.headersOf("Referer", referer)
+		val result = ArrayList<MangaChapter>()
+		val seenIds = HashSet<String>()
+		var offset = 0
+		val limit = 500
+		var expectedTotal = Int.MAX_VALUE
+		while (offset < expectedTotal) {
+			val (token, timestamp) = generateChapterToken()
+			val requestUrl = buildChapterUrl(mangaId, offset, limit, token, timestamp)
+			val raw = webClient.httpGet(requestUrl, headers).parseRaw().trim()
+			if (raw.isEmpty()) {
+				break
+			}
+			val json = runCatching { JSONObject(raw) }.getOrNull() ?: break
+			if (!json.optBoolean("success", false)) {
+				break
+			}
+			expectedTotal = json.optInt("total", expectedTotal)
+			val chaptersArray = json.optJSONArray("chapters") ?: break
+			if (chaptersArray.length() == 0) {
+				break
+			}
+			for (i in 0 until chaptersArray.length()) {
+				val item = chaptersArray.getJSONObject(i)
+				val key = item.optString("id").ifEmpty { item.optString("url") }
+				if (!seenIds.add(key)) {
+					continue
+				}
+				val fallbackNumber = (offset + i + 1).toFloat()
+				result.add(item.toMangaChapter(fallbackNumber))
+			}
+			offset += chaptersArray.length()
+			if (!json.optBoolean("has_more", false)) {
+				break
+			}
 		}
 		return result
 	}
 
-	private suspend fun captureChapterRequestUrl(detailUrl: String, mangaId: String): String? {
-		// Trigger the client-side tab to fire its AJAX call and grab the signed endpoint.
-		val filterScript = """
-			return url.includes('/auth/manga-chapters?') && url.includes('manga_id=$mangaId');
-		""".trimIndent()
-		val config = InterceptionConfig(
-			timeoutMs = 8000L,
-			pageScript = chapterTabScript,
-			filterScript = filterScript,
-			maxRequests = 1,
-		)
-		val intercepted = runCatching {
-			context.interceptWebViewRequests(
-				url = detailUrl,
-				config = config,
-			)
-		}.getOrNull().orEmpty()
-		return intercepted.firstOrNull()?.url
+	private fun buildChapterUrl(
+		mangaId: String,
+		offset: Int,
+		limit: Int,
+		token: String,
+		timestamp: String,
+	): String {
+		return HttpUrl.Builder()
+			.scheme("https")
+			.host(domain)
+			.addPathSegment("auth")
+			.addPathSegment("manga-chapters")
+			.addQueryParameter("manga_id", mangaId)
+			.addQueryParameter("offset", offset.toString())
+			.addQueryParameter("limit", limit.toString())
+			.addQueryParameter("order", "ASC")
+			.addQueryParameter("_t", token)
+			.addQueryParameter("_ts", timestamp)
+			.build()
+			.toString()
+	}
+
+	private fun generateChapterToken(): Pair<String, String> {
+		val timestamp = (System.currentTimeMillis() / 1000L).toString()
+		val hourKey = ZonedDateTime.now(ZoneOffset.UTC).format(tokenFormatter)
+		val secret = "mng_ch_$hourKey"
+		val hashInput = timestamp + secret
+		val token = MessageDigest
+			.getInstance("MD5")
+			.digest(hashInput.toByteArray())
+			.toHex()
+			.substring(0, 16)
+		return token to timestamp
+	}
+
+	private fun ByteArray.toHex(): String {
+		if (isEmpty()) {
+			return ""
+		}
+		val chars = CharArray(size * 2)
+		var index = 0
+		for (element in this) {
+			val unsigned = element.toInt() and 0xFF
+			chars[index++] = Character.forDigit((unsigned ushr 4) and 0xF, 16)
+			chars[index++] = Character.forDigit(unsigned and 0xF, 16)
+		}
+		return String(chars)
 	}
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {

@@ -35,29 +35,26 @@ internal class MangaLivre(context: MangaLoaderContext) :
     ): Document {
         println("DEBUG: captureDocument loading $initialUrl with evaluateJs (redirects enabled)")
 
-        // Script that detects MangaLivre content or Cloudflare challenges for faster response
+        // Script that only returns when we have ACTUAL manga content, not just basic page elements
         val script = """
             (() => {
-                // Check for MangaLivre content
-                const hasMangaContent = document.querySelectorAll('.manga__item').length > 0 ||
-                                      document.querySelectorAll('.search-lists').length > 0 ||
-                                      document.querySelectorAll('.page-content-listing').length > 0 ||
-                                      document.querySelectorAll('.genres_wrap').length > 0 ||
-                                      document.title.toLowerCase().includes('manga livre');
+                // Only return when we have actual manga items with content
+                const mangaItems = document.querySelectorAll('.manga__item');
+                const hasMangaContent = mangaItems.length > 3 &&
+                                      document.querySelectorAll('.manga__item img').length > 0;
 
-                // Check for Cloudflare challenge
-                const hasCloudflareChallenge = document.body.textContent.includes('Checking your browser') ||
-                                             document.body.textContent.includes('Just a moment') ||
-                                             document.body.textContent.includes('Please wait') ||
-                                             document.querySelector('.cf-browser-verification') !== null ||
-                                             document.querySelector('[id*="challenge"]') !== null;
+                // Check for serious Cloudflare challenges only
+                const bodyText = document.body.textContent.toLowerCase();
+                const hasCloudflareChallenge = bodyText.includes('checking your browser') ||
+                                             bodyText.includes('just a moment') ||
+                                             document.querySelector('.cf-browser-verification') !== null;
 
-                // Return HTML immediately if we detect content or Cloudflare
+                // Only return if we have REAL content or confirmed Cloudflare
                 if (hasMangaContent || hasCloudflareChallenge) {
                     return document.documentElement ? document.documentElement.outerHTML : "";
                 }
 
-                // Return null to continue waiting (evaluateJs will handle timing)
+                // Return null to continue waiting (let evaluateJs wait longer)
                 return null;
             })();
         """.trimIndent()
@@ -146,11 +143,17 @@ internal class MangaLivre(context: MangaLoaderContext) :
             return true
         }
         val lower = html.lowercase()
-        // Only reject pages that are clearly active challenge pages
-        return (lower.contains("just a moment") && lower.contains("cloudflare")) ||
-            (lower.contains("checking your browser") && lower.contains("cloudflare")) ||
+        // Check for Cloudflare challenges in multiple languages
+        return lower.contains("just a moment") ||
+            lower.contains("checking your browser") ||
+            lower.contains("please wait") ||
+            lower.contains("un instant") ||
+            lower.contains("nous vérifions") ||
+            lower.contains("vérification") ||
+            lower.contains("connexion avant de continuer") ||
             lower.contains("cf-browser-verification") ||
-            lower.contains("cf-chl-opt")
+            lower.contains("cf-chl-opt") ||
+            (lower.contains("title>un instant") && lower.contains("mangalivre"))
     }
 
     // Override fetchAvailableTags to also use webview

@@ -96,21 +96,9 @@ internal class MangaLivre(context: MangaLoaderContext) :
         val script = """
             (() => {
                 return new Promise(resolve => {
-                    const finish = () => {
+                    setTimeout(() => {
                         resolve(document.documentElement ? document.documentElement.outerHTML : "");
-                    };
-
-                    // Wait for page to be ready, then wait a bit more
-                    if (document.readyState === "complete") {
-                        setTimeout(finish, 5000); // Wait 5 seconds after complete
-                    } else {
-                        window.addEventListener("load", () => {
-                            setTimeout(finish, 5000); // Wait 5 seconds after load
-                        }, { once: true });
-                    }
-
-                    // Fallback timeout
-                    setTimeout(finish, 20000); // 20 second max
+                    }, 8000);
                 });
             })();
         """.trimIndent()
@@ -124,21 +112,27 @@ internal class MangaLivre(context: MangaLoaderContext) :
         val doc = Jsoup.parse(html, url)
         println("DEBUG: loadDocumentViaWebView parsed HTML length=${html.length} for $url")
 
-        // Only reject if it's clearly an active Cloudflare challenge AND very small
-        if (html.length < 500 && isActiveCloudflareChallenge(html)) {
+        // Check for successful MangaLivre content first
+        if (hasValidMangaLivreContent(doc)) {
+            println("DEBUG: Found valid MangaLivre content for $url")
+            return doc
+        }
+
+        // Only reject if it's clearly an active Cloudflare challenge
+        if (isActiveCloudflareChallenge(html)) {
             println("WARN: evaluateJs returned active Cloudflare challenge for $url (${html.length} chars)")
             return null
         }
 
-        // Accept any reasonable amount of content - let the parser handle validation
+        // If we got substantial HTML content, allow it through
         if (html.length > 1000) {
-            println("DEBUG: Accepting content for $url (${html.length} chars)")
+            println("DEBUG: Allowing substantial page through for $url (${html.length} chars)")
             return doc
         }
 
-        // Even small content might be valid - only reject if it's clearly broken
+        // For smaller content, be more conservative
         if (html.length < 100) {
-            println("WARN: Very small content received for $url (${html.length} chars), rejecting")
+            println("WARN: Small content received for $url (${html.length} chars), rejecting")
             return null
         }
 

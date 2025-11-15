@@ -6,6 +6,7 @@ import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.model.*
 import org.koitharu.kotatsu.parsers.site.mangareader.MangaReaderParser
 import org.koitharu.kotatsu.parsers.util.*
+import java.text.SimpleDateFormat
 import java.util.*
 
 @MangaSourceParser("PEACHBL", "PeachBl", "ar", ContentType.HENTAI)
@@ -111,18 +112,27 @@ internal class PeachBl(context: MangaLoaderContext) :
 		val docs = webClient.httpGet(manga.url.toAbsoluteUrl(domain)).parseHtml()
 
 		// Extract chapters from the webtoon details page
-		val chapters = docs.select(".chapters-list a.chapter-item").mapChapters(reversed = true) { index, element ->
+		val chapters = docs.select(".chapter-list .chapter-item a.chapter-link").mapChapters(reversed = true) { index, element ->
 			val url = element.attrAsRelativeUrl("href")
-			val title = element.selectFirst(".chapter-number")?.text()
-				?: element.text().trim()
+			val chapterNumber = element.selectFirst(".chapter-number")?.text() ?: ""
+			val chapterTitle = element.selectFirst(".chapter-title")?.text() ?: ""
+			val title = if (chapterTitle.isNotBlank()) {
+				"$chapterNumber - $chapterTitle".trim(' ', '-')
+			} else {
+				chapterNumber.takeIf { it.isNotBlank() } ?: element.text().trim()
+			}
+
+			// Parse upload date from chapter-date element (format: 2025.02.10)
+			val dateText = element.selectFirst(".chapter-date")?.text()
+			val uploadDate = dateText?.let { parseChapterDate(it) } ?: 0L
 
 			MangaChapter(
 				id = generateUid(url),
 				title = title,
 				url = url,
-				number = extractChapterNumber(title) ?: (index + 1f),
+				number = extractChapterNumber(chapterNumber) ?: (index + 1f),
 				volume = 0,
-				uploadDate = 0L, // PeachBL doesn't seem to show dates in chapter list
+				uploadDate = uploadDate,
 				scanlator = null,
 				source = source,
 				branch = null,
@@ -159,5 +169,39 @@ internal class PeachBl(context: MangaLoaderContext) :
 		// Extract number from Arabic chapter titles like "الفصل 1", "الفصل 10.5"
 		val regex = Regex("""(\d+(?:\.\d+)?)""")
 		return regex.find(title)?.groupValues?.get(1)?.toFloatOrNull()
+	}
+
+	private fun parseChapterDate(dateString: String): Long {
+		return try {
+			// Parse date format like "2025.02.10"
+			val dateFormat = SimpleDateFormat("yyyy.MM.dd", Locale.US)
+			dateFormat.parse(dateString)?.time ?: 0L
+		} catch (e: Exception) {
+			0L
+		}
+	}
+
+	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
+		val chapterUrl = chapter.url.toAbsoluteUrl(domain)
+		val doc = webClient.httpGet(chapterUrl).parseHtml()
+
+		// Extract images from the chapter content
+		val images = doc.select(".chapter-content img, #chapter-content img").mapNotNull { img ->
+			val imageUrl = img.attrAsAbsoluteUrlOrNull("src")
+			if (imageUrl != null) {
+				MangaPage(
+					id = generateUid(imageUrl),
+					url = imageUrl,
+					preview = null,
+					source = source,
+				)
+			} else null
+		}
+
+		if (images.isEmpty()) {
+			throw org.koitharu.kotatsu.parsers.exception.ParseException("No images found in chapter", chapterUrl)
+		}
+
+		return images
 	}
 }

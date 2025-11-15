@@ -1,5 +1,6 @@
 package org.koitharu.kotatsu.parsers.site.mangareader.ar
 
+import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.model.*
@@ -74,5 +75,33 @@ internal class PeachBl(context: MangaLoaderContext) :
 
 		val doc = webClient.httpGet(url).parseHtml()
 		return parseMangaList(doc)
+	}
+
+	override fun parseMangaList(docs: Document): List<Manga> {
+		return docs.select(".webtoon-card").mapNotNull { card ->
+			val titleElement = card.selectFirst("h3.webtoon-title a") ?: return@mapNotNull null
+			val coverElement = card.selectFirst(".cover-link") ?: return@mapNotNull null
+			val imageElement = card.selectFirst(".cover-image")
+
+			val relativeUrl = coverElement.attrAsRelativeUrl("href")
+			val title = titleElement.selectFirst(".title-text")?.text()
+				?: titleElement.text().removePrefix("🇰🇷 ").removePrefix("🇯🇵 ").trim()
+
+			Manga(
+				id = generateUid(relativeUrl),
+				url = relativeUrl,
+				title = title,
+				altTitles = emptySet(),
+				publicUrl = coverElement.attrAsAbsoluteUrl("href"),
+				rating = RATING_UNKNOWN,
+				coverUrl = imageElement?.attrAsAbsoluteUrlOrNull("src"),
+				contentRating = if (isNsfwSource) ContentRating.ADULT else null,
+				source = source,
+				tags = emptySet(),
+				state = null,
+				authors = emptySet(),
+				description = null,
+			)
+		}
 	}
 }

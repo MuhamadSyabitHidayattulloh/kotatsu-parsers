@@ -80,10 +80,11 @@ internal class PeachBl(context: MangaLoaderContext) :
 	override fun parseMangaList(docs: Document): List<Manga> {
 		return docs.select(".webtoon-card").mapNotNull { card ->
 			val titleElement = card.selectFirst("h3.webtoon-title a") ?: return@mapNotNull null
-			val coverElement = card.selectFirst(".cover-link") ?: return@mapNotNull null
+			val coverLinkElement = card.selectFirst("a.cover-link") ?: return@mapNotNull null
 			val imageElement = card.selectFirst(".cover-image")
 
-			val relativeUrl = coverElement.attrAsRelativeUrl("href")
+			// Use the cover link URL which points to the correct webtoon page
+			val relativeUrl = coverLinkElement.attrAsRelativeUrl("href")
 			val title = titleElement.selectFirst(".title-text")?.text()
 				?: titleElement.text().removePrefix("🇰🇷 ").removePrefix("🇯🇵 ").trim()
 
@@ -92,7 +93,7 @@ internal class PeachBl(context: MangaLoaderContext) :
 				url = relativeUrl,
 				title = title,
 				altTitles = emptySet(),
-				publicUrl = coverElement.attrAsAbsoluteUrl("href"),
+				publicUrl = coverLinkElement.attrAsAbsoluteUrl("href"),
 				rating = RATING_UNKNOWN,
 				coverUrl = imageElement?.attrAsAbsoluteUrlOrNull("src"),
 				contentRating = if (isNsfwSource) ContentRating.ADULT else null,

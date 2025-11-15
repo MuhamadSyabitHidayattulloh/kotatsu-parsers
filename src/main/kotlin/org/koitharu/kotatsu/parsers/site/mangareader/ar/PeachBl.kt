@@ -12,6 +12,7 @@ import java.util.*
 internal class PeachBl(context: MangaLoaderContext) :
 	MangaReaderParser(context, MangaParserSource.PEACHBL, "peach-bl.com", pageSize = 20, searchPageSize = 10) {
 	override val sourceLocale: Locale = Locale.ENGLISH
+	override val listUrl = "" // Use root page instead of /manga
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
 		val url = buildString {
@@ -104,5 +105,59 @@ internal class PeachBl(context: MangaLoaderContext) :
 				description = null,
 			)
 		}
+	}
+
+	override suspend fun getDetails(manga: Manga): Manga {
+		val docs = webClient.httpGet(manga.url.toAbsoluteUrl(domain)).parseHtml()
+
+		// Extract chapters from the webtoon details page
+		val chapters = docs.select(".chapters-list a.chapter-item").mapChapters(reversed = true) { index, element ->
+			val url = element.attrAsRelativeUrl("href")
+			val title = element.selectFirst(".chapter-number")?.text()
+				?: element.text().trim()
+
+			MangaChapter(
+				id = generateUid(url),
+				title = title,
+				url = url,
+				number = extractChapterNumber(title) ?: (index + 1f),
+				volume = 0,
+				uploadDate = 0L, // PeachBL doesn't seem to show dates in chapter list
+				scanlator = null,
+				source = source,
+				branch = null,
+			)
+		}
+
+		// Extract manga details
+		val title = docs.selectFirst("h1.webtoon-title, h1")?.text()?.trim() ?: manga.title
+		val description = docs.select(".webtoon-summary, .description, .summary").text()?.takeIf { it.isNotBlank() }
+		val coverUrl = docs.selectFirst(".webtoon-cover img, .cover-image")?.attrAsAbsoluteUrlOrNull("src")
+
+		// Extract tags if available
+		val tags = docs.select(".webtoon-tags a, .tags a, .genre a").mapNotNullToSet { tagElement ->
+			val tagTitle = tagElement.text().trim()
+			if (tagTitle.isNotBlank()) {
+				MangaTag(
+					key = tagTitle.lowercase(),
+					title = tagTitle,
+					source = source
+				)
+			} else null
+		}
+
+		return manga.copy(
+			title = title,
+			description = description,
+			coverUrl = coverUrl ?: manga.coverUrl,
+			tags = if (tags.isNotEmpty()) tags else manga.tags,
+			chapters = chapters,
+		)
+	}
+
+	private fun extractChapterNumber(title: String): Float? {
+		// Extract number from Arabic chapter titles like "الفصل 1", "الفصل 10.5"
+		val regex = Regex("""(\d+(?:\.\d+)?)""")
+		return regex.find(title)?.groupValues?.get(1)?.toFloatOrNull()
 	}
 }

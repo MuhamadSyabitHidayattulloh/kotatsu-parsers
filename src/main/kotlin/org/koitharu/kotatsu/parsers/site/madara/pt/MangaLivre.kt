@@ -190,7 +190,15 @@ internal class MangaLivre(context: MangaLoaderContext) :
         val root1 = body.selectFirst("header")?.selectFirst("ul.second-menu")
         val root2 = body.selectFirst("div.genres_wrap")?.selectFirst("ul.list-unstyled")
         if (root1 == null && root2 == null) {
-            return emptySet()
+            val title = doc.title()
+            val bodySnippet = body.outerHtml().take(800)
+            throw ParseException(
+                "Could not find tag containers in MangaLivre page. " +
+                "Page title: '$title'. " +
+                "Expected 'header ul.second-menu' or 'div.genres_wrap ul.list-unstyled'. " +
+                "Body HTML snippet: '$bodySnippet'",
+                url
+            )
         }
         val list = root1?.select("li").orEmpty() + root2?.select("li").orEmpty()
         val keySet = HashSet<String>(list.size)
@@ -316,8 +324,18 @@ internal class MangaLivre(context: MangaLoaderContext) :
 
         println("DEBUG: Final count: ${items.size} manga items")
         if (items.isEmpty()) {
-            println("DEBUG: No items found, falling back to super.parseMangaList")
-            return super.parseMangaList(doc)
+            println("DEBUG: No items found, throwing ParseException with page info")
+            val title = doc.title()
+            val bodyText = doc.body()?.text()?.take(500) ?: "no body content"
+            val htmlSnippet = doc.outerHtml().take(1000)
+
+            throw ParseException(
+                "No manga items found in parsed HTML. " +
+                "Page title: '$title'. " +
+                "Body preview: '$bodyText'. " +
+                "HTML snippet: '$htmlSnippet'",
+                doc.location()
+            )
         }
 
         val results = items.mapNotNull { item ->
@@ -366,6 +384,19 @@ internal class MangaLivre(context: MangaLoaderContext) :
         }
 
         println("DEBUG: Parsed ${results.size} manga from ${items.size} items")
+
+        if (results.isEmpty() && items.isNotEmpty()) {
+            // We found items but couldn't parse any valid manga from them
+            val sampleItem = items.firstOrNull()
+            val sampleHtml = sampleItem?.outerHtml()?.take(500) ?: "no sample item"
+
+            throw ParseException(
+                "Found ${items.size} manga items but failed to parse any valid manga. " +
+                "Sample item HTML: '$sampleHtml'",
+                doc.location()
+            )
+        }
+
         return results
     }
 

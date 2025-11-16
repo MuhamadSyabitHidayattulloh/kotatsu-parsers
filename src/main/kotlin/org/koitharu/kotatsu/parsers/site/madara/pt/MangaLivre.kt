@@ -6,6 +6,7 @@ import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.exception.ParseException
 import org.koitharu.kotatsu.parsers.model.*
+import org.koitharu.kotatsu.parsers.network.CloudFlareHelper
 import org.koitharu.kotatsu.parsers.site.madara.MadaraParser
 import org.koitharu.kotatsu.parsers.util.*
 
@@ -35,49 +36,38 @@ internal class MangaLivre(context: MangaLoaderContext) :
     ): Document {
         println("DEBUG: captureDocument loading $initialUrl with evaluateJs (redirects enabled)")
 
-        // Script that detects different page types and returns when content is loaded
+        // Simple script: return content if ready, null to keep waiting
         val script = """
             (() => {
-                // Check for manga list content (search/browse pages)
-                const mangaItems = document.querySelectorAll('.manga__item');
-                const hasMangaListContent = mangaItems.length > 3 &&
-                                          document.querySelectorAll('.manga__item img').length > 0;
+                // Conservative CloudFlare detection - only detect when absolutely sure it's blocking
+                const hasBlockedTitle = document.title && document.title.toLowerCase().includes('access denied');
+                const hasActiveChallengeForm = document.querySelector('form[action*="__cf_chl"]') !== null;
+                const hasChallengeScript = document.querySelector('script[src*="challenge-platform"]') !== null;
 
-                // Check for manga details page content
-                const hasMangaDetailsContent = document.querySelector('h1') &&
-                                             document.querySelectorAll('.wp-manga-chapter').length > 0 &&
-                                             document.querySelector('.summary-content');
+                // Only return blocked if we're absolutely certain
+                if (hasBlockedTitle || hasActiveChallengeForm || hasChallengeScript) {
+                    return "CLOUDFLARE_BLOCKED";
+                }
 
-                // Check for chapter/reader page content
-                const hasChapterContent = document.querySelectorAll('.wp-manga-chapter-img').length > 0 ||
-                                         document.querySelectorAll('.page-break').length > 0 ||
-                                         document.querySelector('.reading-content');
+                // Check for REAL manga content (strict check for actual data)
+                const hasRealMangaContent = document.querySelectorAll('.manga__item').length > 0 ||
+                                          document.querySelectorAll('.search-lists').length > 0 ||
+                                          document.querySelectorAll('.page-content-listing').length > 0 ||
+                                          document.querySelectorAll('.genres_wrap').length > 0 ||
+                                          document.querySelectorAll('header ul.second-menu').length > 0 ||
+                                          document.querySelectorAll('.summary-content').length > 0;
 
-                // Check for tags/genre page content
-                const hasTagsContent = document.querySelectorAll('.genres-content a').length > 5 ||
-                                      document.querySelectorAll('.second-menu li').length > 5;
-
-                // Check for serious Cloudflare challenges only
-                const bodyText = document.body.textContent.toLowerCase();
-                const hasCloudflareChallenge = bodyText.includes('checking your browser') ||
-                                             bodyText.includes('just a moment') ||
-                                             document.querySelector('.cf-browser-verification') !== null;
-
-                // Return if we have any type of real content or Cloudflare
-                const hasValidContent = hasMangaListContent || hasMangaDetailsContent ||
-                                      hasChapterContent || hasTagsContent;
-
-                if (hasValidContent || hasCloudflareChallenge) {
+                if (hasRealMangaContent) {
                     return document.documentElement ? document.documentElement.outerHTML : "";
                 }
 
-                // Return null to continue waiting
+                // No challenge but no real content yet - return null to keep waiting
                 return null;
             })();
         """.trimIndent()
 
         val html = try {
-            context.evaluateJs(initialUrl, script, timeoutMs)?.let { raw ->
+            context.evaluateJs(initialUrl, script, timeout = timeoutMs)?.let { raw ->
                 // Remove surrounding quotes if present and decode escapes
                 val unquoted = if (raw.startsWith("\"") && raw.endsWith("\"")) {
                     raw.substring(1, raw.length - 1)
@@ -87,15 +77,11 @@ internal class MangaLivre(context: MangaLoaderContext) :
                         .replace("\\t", "\t")
                 } else raw
 
-                // Decode Unicode escapes like \u003C to <
-                var result = unquoted
-                val unicodePattern = Regex("""\\u([0-9A-Fa-f]{4})""")
-                unicodePattern.findAll(unquoted).forEach { match ->
+                // Decode Unicode escapes like \u003C to < more efficiently
+                unquoted.replace(Regex("""\\u([0-9A-Fa-f]{4})""")) { match ->
                     val hexValue = match.groupValues[1]
-                    val char = hexValue.toInt(16).toChar()
-                    result = result.replace(match.value, char.toString())
+                    hexValue.toInt(16).toChar().toString()
                 }
-                result
             }
         } catch (e: Exception) {
             println("ERROR: evaluateJs failed for $initialUrl (${e.message})")
@@ -104,6 +90,8 @@ internal class MangaLivre(context: MangaLoaderContext) :
 
         if (html.isNullOrBlank()) {
             println("ERROR: No HTML content captured for $initialUrl")
+        } else if (html == "CLOUDFLARE_BLOCKED") {
+            println("INFO: Cloudflare challenge detected, requesting browser action")
         } else {
             val doc = Jsoup.parse(html, initialUrl)
             println("DEBUG: Captured ${html.length} chars for $initialUrl")
@@ -111,27 +99,17 @@ internal class MangaLivre(context: MangaLoaderContext) :
             // Debug what's actually in the HTML
             val title = doc.title()
             val bodyText = doc.body()?.text()?.take(200) ?: "no body"
-            val htmlPreview = html.take(300)
             println("DEBUG: Page title: '$title'")
             println("DEBUG: Body preview: '$bodyText'")
-            println("DEBUG: Raw HTML preview: '$htmlPreview'")
 
-            // Check for valid content
+            // Only return if we have valid manga content
             if (hasValidMangaLivreContent(doc)) {
                 println("DEBUG: Found valid MangaLivre content")
                 return doc
+            } else {
+                println("DEBUG: No valid MangaLivre content found - treating as blocked")
+                // Don't return the document if it doesn't have manga content
             }
-
-            // More thorough Cloudflare detection
-            val isCloudflare = isActiveCloudflareChallenge(html)
-            println("DEBUG: Cloudflare challenge detected: $isCloudflare")
-
-            if (!isCloudflare && html.length > 1000) {
-                println("DEBUG: Accepting substantial non-Cloudflare content")
-                return doc
-            }
-
-            println("WARN: Content appears to be Cloudflare challenge or invalid")
         }
 
         if (allowBrowserAction) {
@@ -145,32 +123,59 @@ internal class MangaLivre(context: MangaLoaderContext) :
 
 
     private fun hasValidMangaLivreContent(doc: Document): Boolean {
-        // Check for MangaLivre-specific content that indicates successful load
-        return doc.select("div.manga__item").isNotEmpty() ||
+        // Conservative CloudFlare detection - only reject when absolutely sure it's blocking
+        val hasBlockedTitle = doc.title().lowercase().contains("access denied")
+        val hasActiveChallengeForm = doc.selectFirst("form[action*=__cf_chl]") != null
+        val hasChallengeScript = doc.selectFirst("script[src*=challenge-platform]") != null
+
+        // Only reject if we're absolutely certain it's blocked
+        if (hasBlockedTitle || hasActiveChallengeForm || hasChallengeScript) {
+            return false
+        }
+
+        // Check for MangaLivre-specific content OR basic page indicators
+        val hasMangaContent = doc.select("div.manga__item").isNotEmpty() ||
             doc.select("div.search-lists").isNotEmpty() ||
             doc.select("div.page-content-listing").isNotEmpty() ||
             doc.select("div.genres_wrap").isNotEmpty() ||
             doc.select("header ul.second-menu").isNotEmpty() ||
-            doc.title().contains("manga livre", ignoreCase = true) ||
             doc.select("div.summary-content").isNotEmpty()
+
+        // Also accept if it's a working MangaLivre page (less strict)
+        val isMangaLivrePage = doc.title().contains("manga livre", ignoreCase = true) ||
+            (doc.body()?.html()?.length ?: 0) > 5000
+
+        return hasMangaContent || isMangaLivrePage
     }
 
     private fun isActiveCloudflareChallenge(html: String): Boolean {
         if (html.length < 100) {
             return true
         }
+
+        // Parse HTML to check for CloudFlare elements (mimicking CloudFlareHelper logic)
+        val doc = Jsoup.parse(html)
+
+        // Check for blocked page indicators
+        val isBlocked = doc.selectFirst("h2[data-translate=\"blocked_why_headline\"]") != null
+
+        // Check for captcha challenge indicators
+        val isCaptchaChallenge = doc.getElementById("challenge-error-title") != null ||
+            doc.getElementById("challenge-error-text") != null ||
+            doc.selectFirst(".cf-browser-verification") != null
+
         val lower = html.lowercase()
-        // Check for Cloudflare challenges in multiple languages
-        return lower.contains("just a moment") ||
+        // Check for text-based challenge indicators
+        val isTextChallenge = lower.contains("just a moment") ||
             lower.contains("checking your browser") ||
             lower.contains("please wait") ||
+            lower.contains("un momento") ||
             lower.contains("un instant") ||
             lower.contains("nous vérifions") ||
             lower.contains("vérification") ||
-            lower.contains("connexion avant de continuer") ||
-            lower.contains("cf-browser-verification") ||
-            lower.contains("cf-chl-opt") ||
-            (lower.contains("title>un instant") && lower.contains("mangalivre"))
+            lower.contains("cf-chl-opt")
+
+        return isBlocked || isCaptchaChallenge || isTextChallenge
     }
 
     // Override fetchAvailableTags to also use webview
@@ -184,7 +189,15 @@ internal class MangaLivre(context: MangaLoaderContext) :
         val root1 = body.selectFirst("header")?.selectFirst("ul.second-menu")
         val root2 = body.selectFirst("div.genres_wrap")?.selectFirst("ul.list-unstyled")
         if (root1 == null && root2 == null) {
-            return emptySet()
+            val title = doc.title()
+            val bodySnippet = body.outerHtml().take(800)
+            throw ParseException(
+                "Could not find tag containers in MangaLivre page. " +
+                    "Page title: '$title'. " +
+                    "Expected 'header ul.second-menu' or 'div.genres_wrap ul.list-unstyled'. " +
+                    "Body HTML snippet: '$bodySnippet'",
+                url
+            )
         }
         val list = root1?.select("li").orEmpty() + root2?.select("li").orEmpty()
         val keySet = HashSet<String>(list.size)
@@ -310,8 +323,18 @@ internal class MangaLivre(context: MangaLoaderContext) :
 
         println("DEBUG: Final count: ${items.size} manga items")
         if (items.isEmpty()) {
-            println("DEBUG: No items found, falling back to super.parseMangaList")
-            return super.parseMangaList(doc)
+            println("DEBUG: No items found, throwing ParseException with page info")
+            val title = doc.title()
+            val bodyText = doc.body()?.text()?.take(500) ?: "no body content"
+            val htmlSnippet = doc.outerHtml().take(1000)
+
+            throw ParseException(
+                "No manga items found in parsed HTML. " +
+                    "Page title: '$title'. " +
+                    "Body preview: '$bodyText'. " +
+                    "HTML snippet: '$htmlSnippet'",
+                doc.location()
+            )
         }
 
         val results = items.mapNotNull { item ->
@@ -360,6 +383,19 @@ internal class MangaLivre(context: MangaLoaderContext) :
         }
 
         println("DEBUG: Parsed ${results.size} manga from ${items.size} items")
+
+        if (results.isEmpty() && items.isNotEmpty()) {
+            // We found items but couldn't parse any valid manga from them
+            val sampleItem = items.firstOrNull()
+            val sampleHtml = sampleItem?.outerHtml()?.take(500) ?: "no sample item"
+
+            throw ParseException(
+                "Found ${items.size} manga items but failed to parse any valid manga. " +
+                    "Sample item HTML: '$sampleHtml'",
+                doc.location()
+            )
+        }
+
         return results
     }
 

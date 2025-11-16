@@ -39,13 +39,13 @@ internal class MangaLivre(context: MangaLoaderContext) :
         // Simple script: return content if ready, null to keep waiting
         val script = """
             (() => {
-                // Check for Cloudflare challenge DOM elements (definitive blocked)
-                const isBlocked = document.querySelector('h2[data-translate="blocked_why_headline"]') !== null;
-                const isCaptchaChallenge = document.getElementById('challenge-error-title') !== null ||
-                                         document.getElementById('challenge-error-text') !== null ||
-                                         document.querySelector('.cf-browser-verification') !== null;
+                // Conservative CloudFlare detection - only detect when absolutely sure it's blocking
+                const hasBlockedTitle = document.title && document.title.toLowerCase().includes('access denied');
+                const hasActiveChallengeForm = document.querySelector('form[action*="__cf_chl"]') !== null;
+                const hasChallengeScript = document.querySelector('script[src*="challenge-platform"]') !== null;
 
-                if (isBlocked || isCaptchaChallenge) {
+                // Only return blocked if we're absolutely certain
+                if (hasBlockedTitle || hasActiveChallengeForm || hasChallengeScript) {
                     return "CLOUDFLARE_BLOCKED";
                 }
 
@@ -123,14 +123,13 @@ internal class MangaLivre(context: MangaLoaderContext) :
 
 
     private fun hasValidMangaLivreContent(doc: Document): Boolean {
-        // Check for Cloudflare challenges (DOM elements only - NO text detection)
-        val isBlocked = doc.selectFirst("h2[data-translate=\"blocked_why_headline\"]") != null
-        val isCaptchaChallenge = doc.getElementById("challenge-error-title") != null ||
-                                doc.getElementById("challenge-error-text") != null ||
-                                doc.selectFirst(".cf-browser-verification") != null
+        // Conservative CloudFlare detection - only reject when absolutely sure it's blocking
+        val hasBlockedTitle = doc.title().lowercase().contains("access denied")
+        val hasActiveChallengeForm = doc.selectFirst("form[action*=__cf_chl]") != null
+        val hasChallengeScript = doc.selectFirst("script[src*=challenge-platform]") != null
 
-        // Reject pages that have Cloudflare challenge DOM elements
-        if (isBlocked || isCaptchaChallenge) {
+        // Only reject if we're absolutely certain it's blocked
+        if (hasBlockedTitle || hasActiveChallengeForm || hasChallengeScript) {
             return false
         }
 

@@ -36,19 +36,9 @@ internal class MangaLivre(context: MangaLoaderContext) :
     ): Document {
         println("DEBUG: captureDocument loading $initialUrl with evaluateJs (redirects enabled)")
 
-        // Simple script: return content if ready, null to keep waiting
+        // Simple script: only return when we detect actual page content
         val script = """
             (() => {
-                // Conservative CloudFlare detection - only detect when absolutely sure it's blocking
-                const hasBlockedTitle = document.title && document.title.toLowerCase().includes('access denied');
-                const hasActiveChallengeForm = document.querySelector('form[action*="__cf_chl"]') !== null;
-                const hasChallengeScript = document.querySelector('script[src*="challenge-platform"]') !== null;
-
-                // Only return blocked if we're absolutely certain
-                if (hasBlockedTitle || hasActiveChallengeForm || hasChallengeScript) {
-                    return "CLOUDFLARE_BLOCKED";
-                }
-
                 // Check for REAL manga content (strict check for actual data)
                 const hasRealMangaContent = document.querySelectorAll('.manga__item').length > 0 ||
                                           document.querySelectorAll('.search-lists').length > 0 ||
@@ -61,7 +51,7 @@ internal class MangaLivre(context: MangaLoaderContext) :
                     return document.documentElement ? document.documentElement.outerHTML : "";
                 }
 
-                // No challenge but no real content yet - return null to keep waiting
+                // No real content yet - return null to keep waiting
                 return null;
             })();
         """.trimIndent()
@@ -89,9 +79,7 @@ internal class MangaLivre(context: MangaLoaderContext) :
         }
 
         if (html.isNullOrBlank()) {
-            println("ERROR: No HTML content captured for $initialUrl")
-        } else if (html == "CLOUDFLARE_BLOCKED") {
-            println("INFO: Cloudflare challenge detected, requesting browser action")
+            println("DEBUG: Script returned null - content not ready yet or timeout reached")
         } else {
             val doc = Jsoup.parse(html, initialUrl)
             println("DEBUG: Captured ${html.length} chars for $initialUrl")
@@ -102,14 +90,8 @@ internal class MangaLivre(context: MangaLoaderContext) :
             println("DEBUG: Page title: '$title'")
             println("DEBUG: Body preview: '$bodyText'")
 
-            // Only return if we have valid manga content
-            if (hasValidMangaLivreContent(doc)) {
-                println("DEBUG: Found valid MangaLivre content")
-                return doc
-            } else {
-                println("DEBUG: No valid MangaLivre content found - treating as blocked")
-                // Don't return the document if it doesn't have manga content
-            }
+            println("DEBUG: Script detected manga content, returning document")
+            return doc
         }
 
         if (allowBrowserAction) {

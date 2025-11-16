@@ -6,7 +6,6 @@ import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.koitharu.kotatsu.parsers.site.madara.MadaraParser
 
-@Broken
 @MangaSourceParser("HWAGO", "Hwago", "id")
 internal class Hwago(context: MangaLoaderContext) :
 	MadaraParser(context, MangaParserSource.HWAGO, "01.hwago.xyz") {

@@ -36,22 +36,29 @@ internal class MangaLivre(context: MangaLoaderContext) :
     ): Document {
         println("DEBUG: captureDocument loading $initialUrl with evaluateJs (redirects enabled)")
 
-        // Simple script: only return when we detect actual page content
         val script = """
             (() => {
-                // Check for REAL manga content (strict check for actual data)
-                const hasRealMangaContent = document.querySelectorAll('.manga__item').length > 0 ||
-                                          document.querySelectorAll('.search-lists').length > 0 ||
-                                          document.querySelectorAll('.page-content-listing').length > 0 ||
-                                          document.querySelectorAll('.genres_wrap').length > 0 ||
-                                          document.querySelectorAll('header ul.second-menu').length > 0 ||
-                                          document.querySelectorAll('.summary-content').length > 0;
+                // No CloudFlare detection - just check for manga content
+                // Check if we have actual manga content
+                const hasMangaContent = document.querySelectorAll('.manga__item').length > 0 ||
+                                      document.querySelectorAll('.search-lists').length > 0 ||
+                                      document.querySelectorAll('.page-content-listing').length > 0;
 
-                if (hasRealMangaContent) {
+                if (hasMangaContent) {
                     return document.documentElement ? document.documentElement.outerHTML : "";
                 }
 
-                // No real content yet - return null to keep waiting
+                // Force return after 13 seconds to see what's actually happening
+                if (!window.mangaLivreStartTime) {
+                    window.mangaLivreStartTime = Date.now();
+                }
+
+                if (Date.now() - window.mangaLivreStartTime > 13000) {
+                    console.log("FORCED RETURN after 13 seconds - returning current page state");
+                    return document.documentElement ? document.documentElement.outerHTML : "";
+                }
+
+                // Return null to keep waiting (evaluateJs expects this)
                 return null;
             })();
         """.trimIndent()
@@ -79,7 +86,7 @@ internal class MangaLivre(context: MangaLoaderContext) :
         }
 
         if (html.isNullOrBlank()) {
-            println("DEBUG: Script returned null - content not ready yet or timeout reached")
+            println("ERROR: No HTML content captured for $initialUrl (timeout reached)")
         } else {
             val doc = Jsoup.parse(html, initialUrl)
             println("DEBUG: Captured ${html.length} chars for $initialUrl")
@@ -87,10 +94,13 @@ internal class MangaLivre(context: MangaLoaderContext) :
             // Debug what's actually in the HTML
             val title = doc.title()
             val bodyText = doc.body()?.text()?.take(200) ?: "no body"
+            val htmlPreview = html.take(300)
             println("DEBUG: Page title: '$title'")
             println("DEBUG: Body preview: '$bodyText'")
+            println("DEBUG: Raw HTML preview: '$htmlPreview'")
 
-            println("DEBUG: Script detected manga content, returning document")
+            // Return the document regardless to see what's actually there
+            println("DEBUG: Returning document (forced or content detected)")
             return doc
         }
 

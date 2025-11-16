@@ -38,40 +38,50 @@ internal class MangaLivre(context: MangaLoaderContext) :
         // Script that detects different page types and returns when content is loaded
         val script = """
             (() => {
-                // Check for manga list content (search/browse pages)
-                const mangaItems = document.querySelectorAll('.manga__item');
-                const hasMangaListContent = mangaItems.length > 3 &&
-                                          document.querySelectorAll('.manga__item img').length > 0;
+                // Simple timeout-based approach: if document has substantial content, return it
+                const bodyLength = document.body ? document.body.innerHTML.length : 0;
+                const hasSubstantialContent = bodyLength > 5000; // Basic content size check
 
-                // Check for manga details page content
-                const hasMangaDetailsContent = document.querySelector('h1') &&
-                                             document.querySelectorAll('.wp-manga-chapter').length > 0 &&
-                                             document.querySelector('.summary-content');
+                // Check for obvious Cloudflare challenge pages
+                const bodyText = document.body ? document.body.textContent.toLowerCase() : '';
+                const isActiveCloudflare = bodyText.includes('checking your browser') ||
+                                          bodyText.includes('just a moment') ||
+                                          bodyText.includes('please wait') ||
+                                          document.querySelector('.cf-browser-verification') !== null;
 
-                // Check for chapter/reader page content
-                const hasChapterContent = document.querySelectorAll('.wp-manga-chapter-img').length > 0 ||
-                                         document.querySelectorAll('.page-break').length > 0 ||
-                                         document.querySelector('.reading-content');
-
-                // Check for tags/genre page content
-                const hasTagsContent = document.querySelectorAll('.genres-content a').length > 5 ||
-                                      document.querySelectorAll('.second-menu li').length > 5;
-
-                // Check for serious Cloudflare challenges only
-                const bodyText = document.body.textContent.toLowerCase();
-                const hasCloudflareChallenge = bodyText.includes('checking your browser') ||
-                                             bodyText.includes('just a moment') ||
-                                             document.querySelector('.cf-browser-verification') !== null;
-
-                // Return if we have any type of real content or Cloudflare
-                const hasValidContent = hasMangaListContent || hasMangaDetailsContent ||
-                                      hasChapterContent || hasTagsContent;
-
-                if (hasValidContent || hasCloudflareChallenge) {
+                // For Cloudflare challenges, return the page so it can be handled
+                if (isActiveCloudflare) {
                     return document.documentElement ? document.documentElement.outerHTML : "";
                 }
 
-                // Return null to continue waiting
+                // For substantial content, check if it's actual MangaLivre content or just return it
+                if (hasSubstantialContent) {
+                    // Quick check for MangaLivre-specific elements
+                    const hasMangaElements = document.querySelectorAll('.manga__item').length > 0 ||
+                                           document.querySelectorAll('.wp-manga-chapter').length > 0 ||
+                                           document.querySelector('.summary-content') ||
+                                           document.querySelector('.genres-content') ||
+                                           document.querySelector('.second-menu') ||
+                                           document.title.toLowerCase().includes('manga livre');
+
+                    if (hasMangaElements || bodyLength > 20000) {
+                        return document.documentElement ? document.documentElement.outerHTML : "";
+                    }
+                }
+
+                // If we have some content but it seems incomplete, wait a bit more
+                if (bodyLength > 1000) {
+                    // Don't wait forever - after some content appears, give it max 3 more seconds
+                    if (!window.mangaLivreWaitStart) {
+                        window.mangaLivreWaitStart = Date.now();
+                    }
+
+                    if (Date.now() - window.mangaLivreWaitStart > 3000) {
+                        return document.documentElement ? document.documentElement.outerHTML : "";
+                    }
+                }
+
+                // Return null to continue waiting (but evaluateJs will handle overall timeout)
                 return null;
             })();
         """.trimIndent()

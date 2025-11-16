@@ -36,49 +36,32 @@ internal class MangaLivre(context: MangaLoaderContext) :
     ): Document {
         println("DEBUG: captureDocument loading $initialUrl with evaluateJs (redirects enabled)")
 
-        // Script that waits for page to load, then checks for challenges or manga content
+        // Simple script that checks current page state - two outcomes only
         val script = """
             (() => {
-                return new Promise(resolve => {
-                    const checkPageAndResolve = () => {
-                        // Check for Cloudflare challenge DOM elements only (no text detection)
-                        const isBlocked = document.querySelector('h2[data-translate="blocked_why_headline"]') !== null;
-                        const isCaptchaChallenge = document.getElementById('challenge-error-title') !== null ||
-                                                 document.getElementById('challenge-error-text') !== null ||
-                                                 document.querySelector('.cf-browser-verification') !== null;
+                // Check for Cloudflare challenge DOM elements only (no text detection)
+                const isBlocked = document.querySelector('h2[data-translate="blocked_why_headline"]') !== null;
+                const isCaptchaChallenge = document.getElementById('challenge-error-title') !== null ||
+                                         document.getElementById('challenge-error-text') !== null ||
+                                         document.querySelector('.cf-browser-verification') !== null;
 
-                        if (isBlocked || isCaptchaChallenge) {
-                            resolve("CLOUDFLARE_BLOCKED");
-                            return;
-                        }
+                if (isBlocked || isCaptchaChallenge) {
+                    return "CLOUDFLARE_BLOCKED";
+                }
 
-                        // Check if we have actual manga content
-                        const hasMangaContent = document.querySelectorAll('.manga__item').length > 0 ||
-                                              document.querySelectorAll('.search-lists').length > 0 ||
-                                              document.querySelectorAll('.page-content-listing').length > 0 ||
-                                              document.querySelectorAll('.genres_wrap').length > 0 ||
-                                              document.querySelectorAll('header ul.second-menu').length > 0 ||
-                                              document.querySelectorAll('.summary-content').length > 0;
+                // Check if we have actual manga content
+                const hasMangaContent = document.querySelectorAll('.manga__item').length > 0 ||
+                                      document.querySelectorAll('.search-lists').length > 0 ||
+                                      document.querySelectorAll('.page-content-listing').length > 0 ||
+                                      document.querySelectorAll('.genres_wrap').length > 0 ||
+                                      document.querySelectorAll('header ul.second-menu').length > 0 ||
+                                      document.querySelectorAll('.summary-content').length > 0;
 
-                        if (hasMangaContent) {
-                            resolve(document.documentElement ? document.documentElement.outerHTML : "");
-                        } else {
-                            resolve("CLOUDFLARE_BLOCKED");
-                        }
-                    };
-
-                    // Wait for page to load, then check
-                    if (document.readyState === 'complete') {
-                        setTimeout(checkPageAndResolve, 2000); // Wait 2 seconds after complete
-                    } else {
-                        window.addEventListener('load', () => {
-                            setTimeout(checkPageAndResolve, 2000); // Wait 2 seconds after load
-                        });
-                    }
-
-                    // Fallback timeout
-                    setTimeout(checkPageAndResolve, 10000);
-                });
+                if (hasMangaContent) {
+                    return document.documentElement ? document.documentElement.outerHTML : "";
+                } else {
+                    return "CLOUDFLARE_BLOCKED";
+                }
             })();
         """.trimIndent()
 

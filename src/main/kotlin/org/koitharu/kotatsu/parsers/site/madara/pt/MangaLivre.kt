@@ -36,10 +36,10 @@ internal class MangaLivre(context: MangaLoaderContext) :
     ): Document {
         println("DEBUG: captureDocument loading $initialUrl with evaluateJs (redirects enabled)")
 
-        // Simple script that checks current page state - two outcomes only
+        // Simple script: return content if ready, null to keep waiting
         val script = """
             (() => {
-                // Check for Cloudflare challenge DOM elements only (no text detection)
+                // Check for Cloudflare challenge DOM elements (definitive blocked)
                 const isBlocked = document.querySelector('h2[data-translate="blocked_why_headline"]') !== null;
                 const isCaptchaChallenge = document.getElementById('challenge-error-title') !== null ||
                                          document.getElementById('challenge-error-text') !== null ||
@@ -49,19 +49,20 @@ internal class MangaLivre(context: MangaLoaderContext) :
                     return "CLOUDFLARE_BLOCKED";
                 }
 
-                // Check if we have actual manga content
-                const hasMangaContent = document.querySelectorAll('.manga__item').length > 0 ||
-                                      document.querySelectorAll('.search-lists').length > 0 ||
-                                      document.querySelectorAll('.page-content-listing').length > 0 ||
-                                      document.querySelectorAll('.genres_wrap').length > 0 ||
-                                      document.querySelectorAll('header ul.second-menu').length > 0 ||
-                                      document.querySelectorAll('.summary-content').length > 0;
+                // Check for REAL manga content (strict check for actual data)
+                const hasRealMangaContent = document.querySelectorAll('.manga__item').length > 0 ||
+                                          document.querySelectorAll('.search-lists').length > 0 ||
+                                          document.querySelectorAll('.page-content-listing').length > 0 ||
+                                          document.querySelectorAll('.genres_wrap').length > 0 ||
+                                          document.querySelectorAll('header ul.second-menu').length > 0 ||
+                                          document.querySelectorAll('.summary-content').length > 0;
 
-                if (hasMangaContent) {
+                if (hasRealMangaContent) {
                     return document.documentElement ? document.documentElement.outerHTML : "";
-                } else {
-                    return "CLOUDFLARE_BLOCKED";
                 }
+
+                // No challenge but no real content yet - return null to keep waiting
+                return null;
             })();
         """.trimIndent()
 
@@ -133,13 +134,19 @@ internal class MangaLivre(context: MangaLoaderContext) :
             return false
         }
 
-        // Check for MangaLivre-specific content that indicates successful load
-        return doc.select("div.manga__item").isNotEmpty() ||
+        // Check for MangaLivre-specific content OR basic page indicators
+        val hasMangaContent = doc.select("div.manga__item").isNotEmpty() ||
             doc.select("div.search-lists").isNotEmpty() ||
             doc.select("div.page-content-listing").isNotEmpty() ||
             doc.select("div.genres_wrap").isNotEmpty() ||
             doc.select("header ul.second-menu").isNotEmpty() ||
             doc.select("div.summary-content").isNotEmpty()
+
+        // Also accept if it's a working MangaLivre page (less strict)
+        val isMangaLivrePage = doc.title().contains("manga livre", ignoreCase = true) ||
+                              (doc.body()?.html()?.length ?: 0) > 5000
+
+        return hasMangaContent || isMangaLivrePage
     }
 
     private fun isActiveCloudflareChallenge(html: String): Boolean {

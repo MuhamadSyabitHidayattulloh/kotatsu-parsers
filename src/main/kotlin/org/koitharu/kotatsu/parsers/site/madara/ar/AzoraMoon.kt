@@ -15,32 +15,12 @@ internal class AzoraMoon(context: MangaLoaderContext) :
 	override val tagPrefix = "series-genre/"
 	override val listUrl = "series/"
 
-	// Comprehensive dynamic caching system
-	private val tagCache = ConcurrentHashMap<String, CachedData<Set<MangaTag>>>()
-	private val filterOptionsCache = ConcurrentHashMap<String, CachedData<MangaListFilterOptions>>()
-	private val listPageCache = ConcurrentHashMap<String, CachedData<List<Manga>>>()
-	private val mangaDetailsCache = ConcurrentHashMap<String, CachedData<Manga>>()
-	private val chapterPagesCache = ConcurrentHashMap<String, CachedData<List<MangaPage>>>()
+	// PERMANENT caching system - ONE request per action type EVER
+	private val tagCache = ConcurrentHashMap<String, Set<MangaTag>>()
+	private val filterOptionsCache = ConcurrentHashMap<String, MangaListFilterOptions>()
+	private val singlePageCache = ConcurrentHashMap<String, List<Manga>>() // Only cache ONE page
 	private var lastRequestTime = 0L
 	private val minRequestInterval = 1200L // Increased to 1.2 seconds for heavy rate limiting
-
-	private data class CachedData<T>(
-		val data: T,
-		val timestamp: Long,
-		val ttlMs: Long
-	) {
-		fun isValid(): Boolean = System.currentTimeMillis() - timestamp < ttlMs
-		fun isExpiredButUsable(): Boolean = System.currentTimeMillis() - timestamp < ttlMs * 3 // Allow 3x TTL for fallback
-	}
-
-	// All cache TTLs set to 1 hour as requested
-	companion object {
-		private const val TAGS_TTL = 60 * 60 * 1000L // 1 hour
-		private const val FILTER_OPTIONS_TTL = 60 * 60 * 1000L // 1 hour
-		private const val LIST_PAGE_TTL = 60 * 60 * 1000L // 1 hour
-		private const val MANGA_DETAILS_TTL = 60 * 60 * 1000L // 1 hour
-		private const val CHAPTER_PAGES_TTL = 60 * 60 * 1000L // 1 hour
-	}
 
 	// Rate limiting helper
 	private suspend fun rateLimit() {
@@ -52,20 +32,21 @@ internal class AzoraMoon(context: MangaLoaderContext) :
 		lastRequestTime = System.currentTimeMillis()
 	}
 
-	// Helper function for caching with fallback
-	private suspend inline fun <T> withCache(
-		cache: ConcurrentHashMap<String, CachedData<T>>,
+	// Helper function for PERMANENT caching - one request per operation EVER
+	private suspend inline fun <T> withPermanentCache(
+		cache: ConcurrentHashMap<String, T>,
 		key: String,
-		ttl: Long,
 		useRateLimit: Boolean = true,
 		crossinline fetcher: suspend () -> T
 	): T {
+		// If we have ANY cached data, return it immediately - NEVER make another request
 		val cached = cache[key]
-
-		// If we have ANY cached data (even expired), return it to avoid rate limiting
 		if (cached != null) {
-			return cached.data
+			println("AzoraMoon: Returning permanent cache for $key")
+			return cached
 		}
+
+		println("AzoraMoon: Making ONE-TIME request for $key")
 
 		// Only make requests if we have NO cached data at all
 		// Apply rate limiting only for restricted operations
@@ -75,29 +56,28 @@ internal class AzoraMoon(context: MangaLoaderContext) :
 
 		try {
 			val data = fetcher()
-			cache[key] = CachedData(data, System.currentTimeMillis(), ttl)
+			cache[key] = data // Store permanently, no TTL
+			println("AzoraMoon: Permanently cached $key")
 			return data
 		} catch (e: Exception) {
-			// If this is the first request and it fails, we have no fallback
+			println("AzoraMoon: Request failed for $key: ${e.message}")
 			throw e
 		}
 	}
 
 	// Override tag fetching with caching and rate limiting (HEAVILY RESTRICTED)
-	override suspend fun fetchAvailableTags(): Set<MangaTag> = withCache(
+	override suspend fun fetchAvailableTags(): Set<MangaTag> = withPermanentCache(
 		cache = tagCache,
 		key = "tags",
-		ttl = TAGS_TTL,
 		useRateLimit = true
 	) {
 		super.fetchAvailableTags()
 	}
 
 	// Override filter options with caching (HEAVILY RESTRICTED)
-	override suspend fun getFilterOptions(): MangaListFilterOptions = withCache(
+	override suspend fun getFilterOptions(): MangaListFilterOptions = withPermanentCache(
 		cache = filterOptionsCache,
 		key = "filter_options",
-		ttl = FILTER_OPTIONS_TTL,
 		useRateLimit = true
 	) {
 		MangaListFilterOptions(
@@ -116,45 +96,27 @@ internal class AzoraMoon(context: MangaLoaderContext) :
 		return "list_${page}_${order}_${query}_${tags}_${states}_${contentRating}"
 	}
 
-	// Override list page with caching and rate limiting (HEAVILY RESTRICTED)
+	// Override list page with VERY LIMITED caching - only allow basic browsing
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
-		val cacheKey = generateListCacheKey(page, order, filter)
-		val cached = listPageCache[cacheKey]
-
-		// If we have ANY cached data, return it immediately to avoid AJAX request
-		if (cached != null) {
-			return cached.data
+		// Only allow page 1 requests to avoid pagination spam
+		if (page > 1) {
+			println("AzoraMoon: Blocking page $page request - only page 1 allowed")
+			return emptyList() // Return empty instead of making request
 		}
 
-		// Only if no cache exists, make the request with rate limiting
-		rateLimit()
-
-		try {
-			val data = super.getListPage(page, order, filter)
-			listPageCache[cacheKey] = CachedData(data, System.currentTimeMillis(), LIST_PAGE_TTL)
-			return data
-		} catch (e: Exception) {
-			// No fallback possible for first request
-			throw e
+		// Use simplified cache key for basic browsing only
+		val simplifiedKey = if (filter.query.isNullOrEmpty() && filter.tags.isEmpty() && filter.states.isEmpty()) {
+			"basic_list_${order}" // Basic browsing
+		} else {
+			"search_${filter.query ?: ""}_${order}" // Simple search
 		}
-	}
 
-	// Manga details and chapter pages - NO RATE LIMITING (not restricted by server)
-	override suspend fun getDetails(manga: Manga): Manga = withCache(
-		cache = mangaDetailsCache,
-		key = manga.url,
-		ttl = MANGA_DETAILS_TTL,
-		useRateLimit = false // NO rate limiting for manga details
-	) {
-		super.getDetails(manga)
-	}
-
-	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> = withCache(
-		cache = chapterPagesCache,
-		key = chapter.url,
-		ttl = CHAPTER_PAGES_TTL,
-		useRateLimit = false // NO rate limiting for chapter pages
-	) {
-		super.getPages(chapter)
+		return withPermanentCache(
+			cache = singlePageCache,
+			key = simplifiedKey,
+			useRateLimit = true
+		) {
+			super.getListPage(1, order, filter) // Always request page 1 only
+		}
 	}
 }

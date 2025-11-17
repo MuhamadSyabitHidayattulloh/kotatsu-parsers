@@ -62,11 +62,12 @@ internal class AzoraMoon(context: MangaLoaderContext) :
 	): T {
 		val cached = cache[key]
 
-		// Return cached data if valid
-		if (cached != null && cached.isValid()) {
+		// If we have ANY cached data (even expired), return it to avoid rate limiting
+		if (cached != null) {
 			return cached.data
 		}
 
+		// Only make requests if we have NO cached data at all
 		// Apply rate limiting only for restricted operations
 		if (useRateLimit) {
 			rateLimit()
@@ -77,10 +78,7 @@ internal class AzoraMoon(context: MangaLoaderContext) :
 			cache[key] = CachedData(data, System.currentTimeMillis(), ttl)
 			return data
 		} catch (e: Exception) {
-			// If request fails, return expired cache if available
-			if (cached != null && cached.isExpiredButUsable()) {
-				return cached.data
-			}
+			// If this is the first request and it fails, we have no fallback
 			throw e
 		}
 	}

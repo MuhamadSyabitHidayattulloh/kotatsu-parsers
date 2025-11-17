@@ -107,14 +107,36 @@ internal class AzoraMoon(context: MangaLoaderContext) :
 		)
 	}
 
+	// Generate stable cache key for list pages
+	private fun generateListCacheKey(page: Int, order: SortOrder, filter: MangaListFilter): String {
+		val query = filter.query ?: ""
+		val tags = filter.tags.sortedBy { it.key }.joinToString(",") { it.key }
+		val states = filter.states.sorted().joinToString(",")
+		val contentRating = filter.contentRating?.toString() ?: ""
+		return "list_${page}_${order}_${query}_${tags}_${states}_${contentRating}"
+	}
+
 	// Override list page with caching and rate limiting (HEAVILY RESTRICTED)
-	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> = withCache(
-		cache = listPageCache,
-		key = "list_${page}_${order}_${filter.hashCode()}",
-		ttl = LIST_PAGE_TTL,
-		useRateLimit = true
-	) {
-		super.getListPage(page, order, filter)
+	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
+		val cacheKey = generateListCacheKey(page, order, filter)
+		val cached = listPageCache[cacheKey]
+
+		// If we have ANY cached data, return it immediately to avoid AJAX request
+		if (cached != null) {
+			return cached.data
+		}
+
+		// Only if no cache exists, make the request with rate limiting
+		rateLimit()
+
+		try {
+			val data = super.getListPage(page, order, filter)
+			listPageCache[cacheKey] = CachedData(data, System.currentTimeMillis(), LIST_PAGE_TTL)
+			return data
+		} catch (e: Exception) {
+			// No fallback possible for first request
+			throw e
+		}
 	}
 
 	// Manga details and chapter pages - NO RATE LIMITING (not restricted by server)

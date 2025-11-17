@@ -15,24 +15,31 @@ internal class AzoraMoon(context: MangaLoaderContext) :
 	override val tagPrefix = "series-genre/"
 	override val listUrl = "series/"
 
-	// Rate limiting and caching
-	private val tagCache = ConcurrentHashMap<String, CachedTags>()
-	private val filterOptionsCache = ConcurrentHashMap<String, CachedFilterOptions>()
+	// Comprehensive dynamic caching system
+	private val tagCache = ConcurrentHashMap<String, CachedData<Set<MangaTag>>>()
+	private val filterOptionsCache = ConcurrentHashMap<String, CachedData<MangaListFilterOptions>>()
+	private val listPageCache = ConcurrentHashMap<String, CachedData<List<Manga>>>()
+	private val mangaDetailsCache = ConcurrentHashMap<String, CachedData<Manga>>()
+	private val chapterPagesCache = ConcurrentHashMap<String, CachedData<List<MangaPage>>>()
 	private var lastRequestTime = 0L
-	private val minRequestInterval = 800L // 800ms between requests
+	private val minRequestInterval = 1200L // Increased to 1.2 seconds for heavy rate limiting
 
-	private data class CachedTags(
-		val tags: Set<MangaTag>,
-		val timestamp: Long
+	private data class CachedData<T>(
+		val data: T,
+		val timestamp: Long,
+		val ttlMs: Long
 	) {
-		fun isValid(): Boolean = System.currentTimeMillis() - timestamp < 24 * 60 * 60 * 1000L // 24 hours
+		fun isValid(): Boolean = System.currentTimeMillis() - timestamp < ttlMs
+		fun isExpiredButUsable(): Boolean = System.currentTimeMillis() - timestamp < ttlMs * 3 // Allow 3x TTL for fallback
 	}
 
-	private data class CachedFilterOptions(
-		val options: MangaListFilterOptions,
-		val timestamp: Long
-	) {
-		fun isValid(): Boolean = System.currentTimeMillis() - timestamp < 24 * 60 * 60 * 1000L // 24 hours
+	// All cache TTLs set to 1 hour as requested
+	companion object {
+		private const val TAGS_TTL = 60 * 60 * 1000L // 1 hour
+		private const val FILTER_OPTIONS_TTL = 60 * 60 * 1000L // 1 hour
+		private const val LIST_PAGE_TTL = 60 * 60 * 1000L // 1 hour
+		private const val MANGA_DETAILS_TTL = 60 * 60 * 1000L // 1 hour
+		private const val CHAPTER_PAGES_TTL = 60 * 60 * 1000L // 1 hour
 	}
 
 	// Rate limiting helper
@@ -45,73 +52,89 @@ internal class AzoraMoon(context: MangaLoaderContext) :
 		lastRequestTime = System.currentTimeMillis()
 	}
 
-	// Override tag fetching with caching and rate limiting
-	override suspend fun fetchAvailableTags(): Set<MangaTag> {
-		val cacheKey = "tags"
-		val cached = tagCache[cacheKey]
+	// Helper function for caching with fallback
+	private suspend inline fun <T> withCache(
+		cache: ConcurrentHashMap<String, CachedData<T>>,
+		key: String,
+		ttl: Long,
+		useRateLimit: Boolean = true,
+		crossinline fetcher: suspend () -> T
+	): T {
+		val cached = cache[key]
 
-		// Return cached tags if valid
+		// Return cached data if valid
 		if (cached != null && cached.isValid()) {
-			return cached.tags
+			return cached.data
 		}
 
-		// Apply rate limiting before making request
-		rateLimit()
+		// Apply rate limiting only for restricted operations
+		if (useRateLimit) {
+			rateLimit()
+		}
 
 		try {
-			val tags = super.fetchAvailableTags()
-			tagCache[cacheKey] = CachedTags(tags, System.currentTimeMillis())
-			return tags
+			val data = fetcher()
+			cache[key] = CachedData(data, System.currentTimeMillis(), ttl)
+			return data
 		} catch (e: Exception) {
-			// If request fails, return cached tags if available (even if expired)
-			cached?.let { return it.tags }
+			// If request fails, return expired cache if available
+			if (cached != null && cached.isExpiredButUsable()) {
+				return cached.data
+			}
 			throw e
 		}
 	}
 
-	// Override filter options with caching
-	override suspend fun getFilterOptions(): MangaListFilterOptions {
-		val cacheKey = "filter_options"
-		val cached = filterOptionsCache[cacheKey]
-
-		// Return cached filter options if valid
-		if (cached != null && cached.isValid()) {
-			return cached.options
-		}
-
-		// Apply rate limiting before making request
-		rateLimit()
-
-		try {
-			val options = MangaListFilterOptions(
-				availableTags = fetchAvailableTags(),
-				availableStates = EnumSet.of(MangaState.ONGOING, MangaState.FINISHED, MangaState.ABANDONED),
-				availableContentRating = EnumSet.of(ContentRating.SAFE, ContentRating.ADULT),
-			)
-			filterOptionsCache[cacheKey] = CachedFilterOptions(options, System.currentTimeMillis())
-			return options
-		} catch (e: Exception) {
-			// If request fails, return cached options if available (even if expired)
-			cached?.let { return it.options }
-			throw e
-		}
+	// Override tag fetching with caching and rate limiting (HEAVILY RESTRICTED)
+	override suspend fun fetchAvailableTags(): Set<MangaTag> = withCache(
+		cache = tagCache,
+		key = "tags",
+		ttl = TAGS_TTL,
+		useRateLimit = true
+	) {
+		super.fetchAvailableTags()
 	}
 
-	// Override list page with rate limiting
-	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
-		rateLimit()
-		return super.getListPage(page, order, filter)
+	// Override filter options with caching (HEAVILY RESTRICTED)
+	override suspend fun getFilterOptions(): MangaListFilterOptions = withCache(
+		cache = filterOptionsCache,
+		key = "filter_options",
+		ttl = FILTER_OPTIONS_TTL,
+		useRateLimit = true
+	) {
+		MangaListFilterOptions(
+			availableTags = fetchAvailableTags(),
+			availableStates = EnumSet.of(MangaState.ONGOING, MangaState.FINISHED, MangaState.ABANDONED),
+			availableContentRating = EnumSet.of(ContentRating.SAFE, ContentRating.ADULT),
+		)
 	}
 
-	// Override details with rate limiting
-	override suspend fun getDetails(manga: Manga): Manga {
-		rateLimit()
-		return super.getDetails(manga)
+	// Override list page with caching and rate limiting (HEAVILY RESTRICTED)
+	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> = withCache(
+		cache = listPageCache,
+		key = "list_${page}_${order}_${filter.hashCode()}",
+		ttl = LIST_PAGE_TTL,
+		useRateLimit = true
+	) {
+		super.getListPage(page, order, filter)
 	}
 
-	// Override pages with rate limiting
-	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-		rateLimit()
-		return super.getPages(chapter)
+	// Manga details and chapter pages - NO RATE LIMITING (not restricted by server)
+	override suspend fun getDetails(manga: Manga): Manga = withCache(
+		cache = mangaDetailsCache,
+		key = manga.url,
+		ttl = MANGA_DETAILS_TTL,
+		useRateLimit = false // NO rate limiting for manga details
+	) {
+		super.getDetails(manga)
+	}
+
+	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> = withCache(
+		cache = chapterPagesCache,
+		key = chapter.url,
+		ttl = CHAPTER_PAGES_TTL,
+		useRateLimit = false // NO rate limiting for chapter pages
+	) {
+		super.getPages(chapter)
 	}
 }

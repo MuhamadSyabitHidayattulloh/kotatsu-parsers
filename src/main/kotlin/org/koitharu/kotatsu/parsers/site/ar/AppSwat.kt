@@ -201,8 +201,9 @@ internal class MangaSwat(context: MangaLoaderContext) :
                 allChapters.add(results.getJSONObject(i))
             }
 
-            // Check if there's a next page
-            if (response.optString("next").isNullOrEmpty()) break
+            // Check if there's a next page - properly handle null case
+            val hasNext = !response.isNull("next")
+            if (!hasNext) break
             page++
         }
 

@@ -273,17 +273,8 @@ internal class MangaLivre(context: MangaLoaderContext) :
                 append(filter.year.toString())
             }
 
-            append("&m_orderby=")
-
-            when (order) {
-                SortOrder.POPULARITY -> append("views")
-                SortOrder.UPDATED -> append("latest")
-                SortOrder.NEWEST -> append("new-manga")
-                SortOrder.ALPHABETICAL -> append("alphabet")
-                SortOrder.RATING -> append("rating")
-                SortOrder.RELEVANCE -> {}
-                else -> {}
-            }
+            // Don't specify m_orderby - MangaLivre now blocks special sort parameters
+            // Only use relevance (default) for all requests
         }
 
         println("DEBUG: Loading list URL via captureWebViewUrls: $url")

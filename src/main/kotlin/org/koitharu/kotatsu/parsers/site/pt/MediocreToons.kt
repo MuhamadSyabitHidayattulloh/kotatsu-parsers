@@ -1,17 +1,13 @@
 package org.koitharu.kotatsu.parsers.site.pt
 
-import kotlinx.coroutines.delay
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONObject
-import org.jsoup.Jsoup
-import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.core.PagedMangaParser
-import org.koitharu.kotatsu.parsers.exception.ParseException
 import org.koitharu.kotatsu.parsers.model.ContentType
 import org.koitharu.kotatsu.parsers.model.Manga
 import org.koitharu.kotatsu.parsers.model.MangaChapter
@@ -44,6 +40,11 @@ internal class MediocreToons(context: MangaLoaderContext) : PagedMangaParser(
 	private val apiUrl = "https://api.mediocretoons.site"
 	private val cdnUrl = "https://cdn2.fufutebol.com.br"
 
+	override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()
+		.add("Referer", "https://mediocretoons.com/")
+		.add("X-App-Key", "toons-mediocre-app")
+		.build()
+
 	override val availableSortOrders: Set<SortOrder> = EnumSet.of(
 		SortOrder.UPDATED,
 	)
@@ -70,81 +71,9 @@ internal class MediocreToons(context: MangaLoaderContext) : PagedMangaParser(
 		)
 	}
 
-	private val apiHeaders: Headers
-		get() = Headers.Builder().add("Referer", "https://$domain/").add("Origin", "https://$domain").build()
-
 	private val chapterDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", sourceLocale)
 
-	// CloudFlare warmup system
-	private suspend fun warmupUrl(url: String, timeoutMs: Long = 15000L): Boolean {
-		println("MediocreToons: Starting warmup for $url")
-
-		// Script to detect CloudFlare challenges and wait for "Pesquisar" text
-		val script = """
-			(() => {
-				// Check for CloudFlare challenge indicators
-				const hasBlockedTitle = document.title && document.title.toLowerCase().includes('access denied');
-				const hasActiveChallengeForm = document.querySelector('form[action*="__cf_chl"]') !== null;
-				const hasChallengeScript = document.querySelector('script[src*="challenge-platform"]') !== null;
-
-				// If CloudFlare challenge detected, return challenge status
-				if (hasBlockedTitle || hasActiveChallengeForm || hasChallengeScript) {
-					return "CLOUDFLARE_CHALLENGE";
-				}
-
-				// Look for "Pesquisar" text to confirm page is fully loaded
-				const bodyText = document.body ? document.body.textContent : '';
-				const hasPesquisar = bodyText.toLowerCase().includes('pesquisar');
-
-				if (hasPesquisar) {
-					// Wait 2 seconds to ensure images are warmed up, then return ready
-					if (!window.pesquisarFoundTime) {
-						window.pesquisarFoundTime = Date.now();
-						return null; // Keep waiting
-					}
-
-					const elapsed = Date.now() - window.pesquisarFoundTime;
-					if (elapsed >= 2000) {
-						return "PAGE_READY";
-					}
-
-					return null; // Still waiting for 2 seconds to complete
-				}
-
-				// Page loading but not ready yet
-				return null;
-			})();
-		""".trimIndent()
-
-		try {
-			val result = context.evaluateJs(url, script, timeout = timeoutMs)
-
-			when (result) {
-				"CLOUDFLARE_CHALLENGE" -> {
-					println("MediocreToons: CloudFlare challenge detected, requesting browser action")
-					context.requestBrowserAction(this, url)
-					throw ParseException("Browser action requested for CloudFlare bypass", url)
-				}
-				"PAGE_READY" -> {
-					println("MediocreToons: Page ready with Pesquisar text found and 2-second warmup completed")
-					println("MediocreToons: Warmup completed for $url")
-					return true
-				}
-				else -> {
-					println("MediocreToons: Page not ready yet or failed to load")
-					return false
-				}
-			}
-		} catch (e: Exception) {
-			println("MediocreToons: Warmup failed for $url: ${e.message}")
-			return false
-		}
-	}
-
     override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
-		// Warmup the main site before making API calls
-		warmupUrl("https://$domain/")
-
 
         val url = when {
             // This part remains the same for handling searches and filters.
@@ -163,7 +92,7 @@ internal class MediocreToons(context: MangaLoaderContext) : PagedMangaParser(
             }
         }
 
-        val response = webClient.httpGet(url, apiHeaders).parseJson()
+        val response = webClient.httpGet(url).parseJson()
         val results = response.optJSONArray("data") ?: return emptyList()
         return results.mapJSON { parseMangaFromJson(it) }
     }
@@ -241,11 +170,8 @@ internal class MediocreToons(context: MangaLoaderContext) : PagedMangaParser(
 	}
 
 	override suspend fun getDetails(manga: Manga): Manga {
-		// Warmup the manga detail page before making API calls
-		warmupUrl(manga.publicUrl)
-
 		val mangaId = manga.url.substringAfter("/obra/").substringBefore("/")
-		val response = webClient.httpGet("$apiUrl/obras/$mangaId", apiHeaders).parseJson()
+		val response = webClient.httpGet("$apiUrl/obras/$mangaId").parseJson()
 
 		val description = response.optString("descricao").replace(Regex("</?[^>]+>"), "").replace("\\/", "/")
 			.replace(Regex("\\s+"), " ").trim()
@@ -303,12 +229,9 @@ internal class MediocreToons(context: MangaLoaderContext) : PagedMangaParser(
 
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-		// Warmup the main site before making chapter API calls
-		warmupUrl("https://$domain/")
-
 		val chapterId = chapter.url.substringAfter("/capitulo/")
 
-		val response = webClient.httpGet("$apiUrl/capitulos/$chapterId", apiHeaders).parseJson()
+		val response = webClient.httpGet("$apiUrl/capitulos/$chapterId").parseJson()
 
 		val pagesArray = response.optJSONArray("paginas") ?: throw Exception("No pages found in chapter")
 
@@ -336,11 +259,8 @@ internal class MediocreToons(context: MangaLoaderContext) : PagedMangaParser(
 	}
 
 	private suspend fun fetchAvailableTags(): Set<MangaTag> {
-		// Warmup the main site before making tags API calls
-		warmupUrl("https://$domain/")
-
 		val url = "$apiUrl/tags"
-		val body = webClient.httpGet(url, apiHeaders).body?.string()?.trim()
+		val body = webClient.httpGet(url).body?.string()?.trim()
 
 		if (body == null) return emptySet()
 

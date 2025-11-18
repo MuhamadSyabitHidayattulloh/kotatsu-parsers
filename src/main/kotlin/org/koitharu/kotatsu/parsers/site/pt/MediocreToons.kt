@@ -38,7 +38,7 @@ internal class MediocreToons(context: MangaLoaderContext) : PagedMangaParser(
 ) {
 	override val configKeyDomain = ConfigKey.Domain("mediocretoons.com")
 	private val apiUrl = "https://api.mediocretoons.site"
-	private val cdnUrl = "https://cdn2.fufutebol.com.br"
+	private val cdnUrl = "https://cdn.mediocretoons.site"
 
 	override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()
 		.add("Referer", "https://mediocretoons.com/")

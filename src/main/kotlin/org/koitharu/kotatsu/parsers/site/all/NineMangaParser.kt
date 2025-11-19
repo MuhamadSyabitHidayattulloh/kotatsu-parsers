@@ -170,8 +170,25 @@ internal abstract class NineMangaParser(
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
 		val doc = captureDocument(chapter.url.toAbsoluteUrl(domain))
-		return doc.body().requireElementById("page").select("option").map { option ->
-			val url = option.attr("value")
+		val pageSelect = doc.selectFirst("select#page") ?: doc.selectFirst("select[name=page]")
+
+		if (pageSelect != null) {
+			return pageSelect.select("option").map { option ->
+				val url = option.attr("value")
+				MangaPage(
+					id = generateUid(url),
+					url = url,
+					preview = null,
+					source = source,
+				)
+			}
+		}
+
+		val totalPages = doc.selectFirst("a.pic_download")?.text()?.substringAfter("/")?.trim()?.toIntOrNull()
+			?: throw ParseException("Page list not found", chapter.url)
+
+		return (1..totalPages).map { i ->
+			val url = if (i == 1) chapter.url else chapter.url.replace(".html", "-$i.html")
 			MangaPage(
 				id = generateUid(url),
 				url = url,

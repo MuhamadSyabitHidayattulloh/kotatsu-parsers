@@ -111,7 +111,7 @@ internal abstract class NineMangaParser(
 				id = generateUid(relUrl),
 				url = relUrl,
 				publicUrl = href,
-				title = dd?.selectFirst("a")?.text()?.toCamelCase().orEmpty(),
+				title = dd?.selectFirst("a > b")?.text()?.toCamelCase().orEmpty(),
 				altTitles = emptySet(),
 				coverUrl = node.selectFirst("img")?.src(),
 				rating = RATING_UNKNOWN,
@@ -167,6 +167,8 @@ internal abstract class NineMangaParser(
 				},
 		)
 	}
+
+	override suspend fun getRelatedManga(seed: Manga): List<Manga> = emptyList()
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
 		val doc = captureDocument(chapter.url.toAbsoluteUrl(domain))
@@ -264,6 +266,7 @@ internal abstract class NineMangaParser(
 
 				const hasContent = document.querySelector('ul#list_container') !== null ||
 								   document.querySelector('div.book-left') !== null ||
+								   document.querySelector('div.book-info') !== null ||
 								   document.getElementById('page') !== null ||
 								   document.querySelector('a.pic_download') !== null ||
 								   document.querySelector('img.manga_pic') !== null ||

@@ -236,7 +236,22 @@ internal abstract class NineMangaParser(
 			})();
 		""".trimIndent()
 
-		val html = context.evaluateJs(url, script, 30000L) ?: throw ParseException("Failed to load page", url)
+		val rawHtml = context.evaluateJs(url, script, 30000L) ?: throw ParseException("Failed to load page", url)
+
+		val html = rawHtml.let { raw ->
+			val unquoted = if (raw.startsWith("\"") && raw.endsWith("\"")) {
+				raw.substring(1, raw.length - 1)
+					.replace("\\\"", "\"")
+					.replace("\\n", "\n")
+					.replace("\\r", "\r")
+					.replace("\\t", "\t")
+			} else raw
+
+			unquoted.replace(Regex("""\\u([0-9A-Fa-f]{4})""")) { match ->
+				val hexValue = match.groupValues[1]
+				hexValue.toInt(16).toChar().toString()
+			}
+		}
 
 		if (html == "CLOUDFLARE_BLOCKED") {
 			context.requestBrowserAction(this, url)

@@ -71,10 +71,9 @@ internal abstract class NineMangaParser(
 				append("?page=")
 				append(page.toString())
 
-				filter.query?.let {
-					append("&name_sel=contain&wd=")
-					append(filter.query.urlEncoded())
-				}
+				append("&name_sel=contain&wd=")
+				append(filter.query?.urlEncoded().orEmpty())
+				append("&author_sel=contain&author=&artist_sel=contain&artist=")
 
 				append("&category_id=")
 				append(filter.tags.joinToString(separator = ",") { it.key })
@@ -82,42 +81,50 @@ internal abstract class NineMangaParser(
 				append("&out_category_id=")
 				append(filter.tagsExclude.joinToString(separator = ",") { it.key })
 
+				append("&completed_series=")
 				filter.states.oneOrThrowIfMany()?.let {
-					append("&completed_series=")
 					when (it) {
 						MangaState.ONGOING -> append("no")
 						MangaState.FINISHED -> append("yes")
 						else -> append("either")
 					}
-				}
+				} ?: append("either")
+				
+				append("&released=0&type=high")
 
 			} else {
-				append("/category/index_")
-				append(page.toString())
-				append(".html")
+				append("/list/Hot-Book/")
+				if (page > 1) {
+					append("?page=")
+					append(page.toString())
+				}
 			}
 		}
 		val doc = captureDocument(url)
-		val root = doc.body().selectFirstOrThrow("ul.direlist")
+		val root = doc.body().selectFirstOrThrow("ul#list_container")
 		val baseHost = root.baseUri().toHttpUrl().host
 		return root.select("li").map { node ->
-			val href = node.selectFirstOrThrow("a").attrAsAbsoluteUrl("href")
+			val href = node.selectFirstOrThrow("dt > a").attrAsAbsoluteUrl("href")
 			val relUrl = href.toRelativeUrl(baseHost)
-			val dd = node.selectFirst("dd")
+			val dd = node.selectFirst("dd.book-list")
 			Manga(
 				id = generateUid(relUrl),
 				url = relUrl,
 				publicUrl = href,
-				title = dd?.selectFirst("a.bookname")?.text()?.toCamelCase().orEmpty(),
+				title = dd?.selectFirst("a")?.text()?.toCamelCase().orEmpty(),
 				altTitles = emptySet(),
 				coverUrl = node.selectFirst("img")?.src(),
 				rating = RATING_UNKNOWN,
 				authors = emptySet(),
 				contentRating = null,
-				tags = emptySet(),
+				tags = dd?.select("span")?.flatMap { span -> 
+					span.text().split(",").mapNotNull { tag ->
+						tag.trim().takeIf { it.isNotEmpty() }?.let { MangaTag(key = it, title = it, source = source) }
+					} 
+				}?.toSet().orEmpty(),
 				state = null,
 				source = source,
-				description = dd?.selectFirst("p")?.html(),
+				description = null,
 			)
 		}
 	}
@@ -126,23 +133,25 @@ internal abstract class NineMangaParser(
 		val doc = captureDocument(
 			manga.url.toAbsoluteUrl(domain) + "?waring=1",
 		)
-		val root = doc.body().selectFirstOrThrow("div.manga")
-		val infoRoot = root.selectFirstOrThrow("div.bookintro")
-		val tagMap = getOrCreateTagMap()
-		val selectTag = infoRoot.getElementsByAttributeValue("itemprop", "genre").first()?.select("a")
-		val tags = selectTag?.mapNotNullToSet { tagMap[it.text()] }
-		val author = infoRoot.getElementsByAttributeValue("itemprop", "author").first()?.textOrNull()
+		val root = doc.body().selectFirstOrThrow("div.book-left")
+		val infoRoot = root.selectFirstOrThrow("div.book-info")
+		
+		val author = infoRoot.select("dd.about-book > p").find { it.text().contains("Autor:", ignoreCase = true) }?.select("a")?.text()
+		val statusText = infoRoot.select("dd.about-book > p").find { it.text().contains("Status:", ignoreCase = true) }?.select("a")?.text()
+		val description = infoRoot.select("dd.short-info > p").find { it.text().contains("Sinopse:", ignoreCase = true) }?.html()?.substringAfter("</span>")
+		
 		return manga.copy(
-			title = root.selectFirst("h1[itemprop=name]")?.textOrNull()?.removeSuffix("Manga")?.trimEnd()
-				?: manga.title,
-			tags = tags.orEmpty(),
+			title = infoRoot.selectFirst("h1")?.textOrNull()?.removeSuffix("Manga")?.trimEnd() ?: manga.title,
+			tags = root.select("ul.inset-menu > li > a").mapNotNullToSet { 
+				val text = it.text()
+				if (text.isNotEmpty()) MangaTag(key = text, title = text, source = source) else null 
+			},
 			authors = setOfNotNull(author),
-			state = parseStatus(infoRoot.select("li a.red").text()),
-			description = infoRoot.getElementsByAttributeValue("itemprop", "description").first()?.html()
-				?.substringAfter("</b>"),
-			chapters = root.selectFirst("div.chapterbox")?.select("ul.sub_vol_ul > li")
+			state = statusText?.let { parseStatus(it) },
+			description = description,
+			chapters = root.selectFirst("ul.chapter-box")?.select("li")
 				?.mapChapters(reversed = true) { i, li ->
-					val a = li.selectFirstOrThrow("a.chapter_list_a")
+					val a = li.selectFirst("div.chapter-name.long > a") ?: li.selectFirstOrThrow("div.chapter-name.short > a")
 					val href = a.attrAsRelativeUrl("href").replace("%20", " ")
 					MangaChapter(
 						id = generateUid(href),
@@ -150,7 +159,7 @@ internal abstract class NineMangaParser(
 						number = i + 1f,
 						volume = 0,
 						url = href,
-						uploadDate = parseChapterDateByLang(li.selectFirst("span")?.text().orEmpty()),
+						uploadDate = parseChapterDateByLang(li.selectFirst("div.add-time > span")?.text().orEmpty()),
 						source = source,
 						scanlator = null,
 						branch = null,
@@ -214,8 +223,8 @@ internal abstract class NineMangaParser(
 					return "CLOUDFLARE_BLOCKED";
 				}
 
-				const hasContent = document.querySelector('ul.direlist') !== null ||
-								   document.querySelector('div.manga') !== null ||
+				const hasContent = document.querySelector('ul#list_container') !== null ||
+								   document.querySelector('div.book-left') !== null ||
 								   document.getElementById('page') !== null ||
 								   document.querySelector('a.pic_download') !== null ||
 								   document.querySelector('li.cate_list') !== null;

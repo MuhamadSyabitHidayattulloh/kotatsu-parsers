@@ -170,35 +170,56 @@ internal abstract class NineMangaParser(
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
 		val doc = captureDocument(chapter.url.toAbsoluteUrl(domain))
-		val pageSelect = doc.selectFirst("select#page") ?: doc.selectFirst("select[name=page]")
+		val pageSelect = doc.selectFirst("select.sl-page") 
+			?: doc.selectFirst("select#page") 
+			?: doc.selectFirst("select[name=page]")
 
-		if (pageSelect != null) {
-			return pageSelect.select("option").map { option ->
-				val url = option.attr("value")
-				MangaPage(
-					id = generateUid(url),
-					url = url,
-					preview = null,
-					source = source,
-				)
+		val pageUrls = if (pageSelect != null) {
+			pageSelect.select("option").map { it.attrAsAbsoluteUrl("value") }.distinct()
+		} else {
+			val totalPages = doc.selectFirst("a.pic_download")?.text()?.substringAfter("/")?.trim()?.toIntOrNull()
+				?: throw ParseException("Page list not found", chapter.url)
+			(1..totalPages).map { i ->
+				if (i == 1) chapter.url.toAbsoluteUrl(domain) 
+				else chapter.url.toAbsoluteUrl(domain).replace(".html", "-$i.html")
 			}
 		}
 
-		val totalPages = doc.selectFirst("a.pic_download")?.text()?.substringAfter("/")?.trim()?.toIntOrNull()
-			?: throw ParseException("Page list not found", chapter.url)
+		val pages = Collections.synchronizedList(ArrayList<MangaPage>())
+		val urlsToFetch = pageUrls.filter { it != doc.baseUri() && it != chapter.url.toAbsoluteUrl(domain) }
 
-		return (1..totalPages).map { i ->
-			val url = if (i == 1) chapter.url else chapter.url.replace(".html", "-$i.html")
-			MangaPage(
-				id = generateUid(url),
-				url = url,
-				preview = null,
-				source = source,
-			)
+		// Process the first page (already loaded)
+		val firstPageImages = doc.select("img.manga_pic").map { it.attrAsAbsoluteUrl("src") }
+		firstPageImages.forEach { url ->
+			pages.add(MangaPage(generateUid(url), url, null, source))
 		}
+
+		// Fetch other pages
+		if (urlsToFetch.isNotEmpty()) {
+			for (url in urlsToFetch) {
+				val pageDoc = captureDocument(url)
+				val images = pageDoc.select("img.manga_pic").map { it.attrAsAbsoluteUrl("src") }
+				images.forEach { imgUrl ->
+					pages.add(MangaPage(generateUid(imgUrl), imgUrl, null, source))
+				}
+			}
+		}
+		
+		// If no images found (fallback for single image per page without .manga_pic class?)
+		if (pages.isEmpty()) {
+			// Fallback to old behavior: treat each HTML page as one image page
+			return pageUrls.map { url ->
+				MangaPage(generateUid(url), url, null, source)
+			}
+		}
+
+		return pages
 	}
 
 	override suspend fun getPageUrl(page: MangaPage): String {
+		if (page.url.endsWith(".jpg", true) || page.url.endsWith(".png", true) || page.url.endsWith(".jpeg", true) || page.url.endsWith(".webp", true)) {
+			return page.url
+		}
 		val doc = captureDocument(page.url.toAbsoluteUrl(domain))
 		val root = doc.body()
 		return root.selectFirst("img.manga_pic")?.attrAsAbsoluteUrl("src")

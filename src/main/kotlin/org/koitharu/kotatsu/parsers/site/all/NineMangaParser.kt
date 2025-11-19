@@ -202,11 +202,15 @@ internal abstract class NineMangaParser(
 	private suspend fun captureDocument(url: String): Document {
 		val script = """
 			(() => {
-				const hasBlockedTitle = document.title.toLowerCase().includes('access denied');
+				const title = document.title.toLowerCase();
+				const bodyText = document.body.innerText;
+
+				const hasBlockedTitle = title.includes('access denied');
+				const hasFake404 = title.includes('404 not found') && bodyText.includes('the site is closed');
 				const hasActiveChallengeForm = document.querySelector('form[action*="__cf_chl"]') !== null;
 				const hasChallengeScript = document.querySelector('script[src*="challenge-platform"]') !== null;
 
-				if (hasBlockedTitle || hasActiveChallengeForm || hasChallengeScript) {
+				if (hasBlockedTitle || hasFake404 || hasActiveChallengeForm || hasChallengeScript) {
 					return "CLOUDFLARE_BLOCKED";
 				}
 

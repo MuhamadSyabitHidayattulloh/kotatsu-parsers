@@ -273,6 +273,9 @@ internal abstract class NineMangaParser(
 								   document.querySelector('li.cate_list') !== null;
 
 				if (hasContent) {
+					window.stop();
+					const elementsToRemove = document.querySelectorAll('script, iframe, object, embed, style');
+					elementsToRemove.forEach(el => el.remove());
 					return document.documentElement.outerHTML;
 				}
 				return null;

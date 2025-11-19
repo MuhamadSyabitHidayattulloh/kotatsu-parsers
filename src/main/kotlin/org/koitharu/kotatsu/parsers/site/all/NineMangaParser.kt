@@ -1,17 +1,18 @@
 package org.koitharu.kotatsu.parsers.site.all
 
-import androidx.collection.ArrayMap
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Interceptor
-import okhttp3.Response
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.core.PagedMangaParser
+import org.koitharu.kotatsu.parsers.exception.ParseException
 import org.koitharu.kotatsu.parsers.model.*
 import org.koitharu.kotatsu.parsers.util.*
+import androidx.collection.ArrayMap
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -19,7 +20,7 @@ internal abstract class NineMangaParser(
 	context: MangaLoaderContext,
 	source: MangaParserSource,
 	defaultDomain: String,
-) : PagedMangaParser(context, source, pageSize = 26), Interceptor {
+) : PagedMangaParser(context, source, pageSize = 26) {
 
 	override val configKeyDomain = ConfigKey.Domain(defaultDomain)
 
@@ -54,15 +55,7 @@ internal abstract class NineMangaParser(
 		),
 	)
 
-	override fun intercept(chain: Interceptor.Chain): Response {
-		val request = chain.request()
-		val newRequest = if (request.url.host == domain) {
-			request.newBuilder().removeHeader("Referer").build()
-		} else {
-			request
-		}
-		return chain.proceed(newRequest)
-	}
+
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
 		val url = buildString {
@@ -99,7 +92,7 @@ internal abstract class NineMangaParser(
 				append(page.toString())
 			}
 		}
-		val doc = webClient.httpGet(url).parseHtml()
+		val doc = captureDocument(url)
 		val root = doc.body().selectFirstOrThrow("ul.direlist")
 		val baseHost = root.baseUri().toHttpUrl().host
 		return root.select("li").map { node ->
@@ -125,9 +118,9 @@ internal abstract class NineMangaParser(
 	}
 
 	override suspend fun getDetails(manga: Manga): Manga {
-		val doc = webClient.httpGet(
+		val doc = captureDocument(
 			manga.url.toAbsoluteUrl(domain) + "?waring=1",
-		).parseHtml()
+		)
 		val root = doc.body().selectFirstOrThrow("div.manga")
 		val infoRoot = root.selectFirstOrThrow("div.bookintro")
 		val tagMap = getOrCreateTagMap()
@@ -162,7 +155,7 @@ internal abstract class NineMangaParser(
 	}
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-		val doc = webClient.httpGet(chapter.url.toAbsoluteUrl(domain)).parseHtml()
+		val doc = captureDocument(chapter.url.toAbsoluteUrl(domain))
 		return doc.body().requireElementById("page").select("option").map { option ->
 			val url = option.attr("value")
 			MangaPage(
@@ -175,7 +168,7 @@ internal abstract class NineMangaParser(
 	}
 
 	override suspend fun getPageUrl(page: MangaPage): String {
-		val doc = webClient.httpGet(page.url.toAbsoluteUrl(domain)).parseHtml()
+		val doc = captureDocument(page.url.toAbsoluteUrl(domain))
 		val root = doc.body()
 		return root.selectFirstOrThrow("a.pic_download").attrAsAbsoluteUrl("href")
 	}
@@ -186,7 +179,7 @@ internal abstract class NineMangaParser(
 	private suspend fun getOrCreateTagMap(): Map<String, MangaTag> = mutex.withLock {
 		tagCache?.let { return@withLock it }
 		val tagMap = ArrayMap<String, MangaTag>()
-		val tagElements = webClient.httpGet("https://${domain}/search/?type=high").parseHtml().select("li.cate_list")
+		val tagElements = captureDocument("https://${domain}/search/?type=high").select("li.cate_list")
 		for (el in tagElements) {
 			if (el.text().isEmpty()) continue
 			val cateId = el.attr("cate_id")
@@ -199,6 +192,40 @@ internal abstract class NineMangaParser(
 		}
 		tagCache = tagMap
 		return@withLock tagMap
+	}
+
+	private suspend fun captureDocument(url: String): Document {
+		val script = """
+			(() => {
+				const hasBlockedTitle = document.title.toLowerCase().includes('access denied');
+				const hasActiveChallengeForm = document.querySelector('form[action*="__cf_chl"]') !== null;
+				const hasChallengeScript = document.querySelector('script[src*="challenge-platform"]') !== null;
+
+				if (hasBlockedTitle || hasActiveChallengeForm || hasChallengeScript) {
+					return "CLOUDFLARE_BLOCKED";
+				}
+
+				const hasContent = document.querySelector('ul.direlist') !== null ||
+								   document.querySelector('div.manga') !== null ||
+								   document.getElementById('page') !== null ||
+								   document.querySelector('a.pic_download') !== null ||
+								   document.querySelector('li.cate_list') !== null;
+
+				if (hasContent) {
+					return document.documentElement.outerHTML;
+				}
+				return null;
+			})();
+		""".trimIndent()
+
+		val html = context.evaluateJs(url, script, 30000L) ?: throw ParseException("Failed to load page", url)
+
+		if (html == "CLOUDFLARE_BLOCKED") {
+			context.requestBrowserAction(this, url)
+			throw ParseException("Cloudflare challenge detected", url)
+		}
+
+		return Jsoup.parse(html, url)
 	}
 
 	private fun parseStatus(status: String) = when {

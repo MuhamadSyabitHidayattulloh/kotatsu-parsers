@@ -29,6 +29,10 @@ internal abstract class NineMangaParser(
 		keys.add(userAgentKey)
 	}
 
+	init {
+		context.cookieJar.insertCookies(domain, "ninemanga_template_desk=no")
+	}
+
 
 
 	override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()
@@ -90,6 +94,7 @@ internal abstract class NineMangaParser(
 			} else {
 				append("/category/index_")
 				append(page.toString())
+				append(".html")
 			}
 		}
 		val doc = captureDocument(url)

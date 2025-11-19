@@ -184,7 +184,8 @@ internal abstract class NineMangaParser(
 	override suspend fun getPageUrl(page: MangaPage): String {
 		val doc = captureDocument(page.url.toAbsoluteUrl(domain))
 		val root = doc.body()
-		return root.selectFirstOrThrow("a.pic_download").attrAsAbsoluteUrl("href")
+		return root.selectFirst("img.manga_pic")?.attrAsAbsoluteUrl("src")
+			?: root.selectFirstOrThrow("a.pic_download").attrAsAbsoluteUrl("href")
 	}
 
 	private var tagCache: ArrayMap<String, MangaTag>? = null
@@ -227,6 +228,7 @@ internal abstract class NineMangaParser(
 								   document.querySelector('div.book-left') !== null ||
 								   document.getElementById('page') !== null ||
 								   document.querySelector('a.pic_download') !== null ||
+								   document.querySelector('img.manga_pic') !== null ||
 								   document.querySelector('li.cate_list') !== null;
 
 				if (hasContent) {
@@ -328,7 +330,7 @@ internal abstract class NineMangaParser(
 	class English(context: MangaLoaderContext) : NineMangaParser(
 		context,
 		MangaParserSource.NINEMANGA_EN,
-		"www.ninemanga.com",
+		"ninemanga.com",
 	)
 
 	@MangaSourceParser("NINEMANGA_ES", "NineManga Español", "es")

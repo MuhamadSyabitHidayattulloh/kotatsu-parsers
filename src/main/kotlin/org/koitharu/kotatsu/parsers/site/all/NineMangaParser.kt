@@ -28,9 +28,7 @@ internal abstract class NineMangaParser(
 		keys.add(userAgentKey)
 	}
 
-	init {
-		context.cookieJar.insertCookies(domain, "ninemanga_template_desk=yes")
-	}
+
 
 	override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()
 		.add("Accept-Language", "en-US;q=0.7,en;q=0.3")

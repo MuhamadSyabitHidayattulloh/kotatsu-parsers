@@ -190,27 +190,22 @@ internal abstract class NineMangaParser(
 			?: doc.selectFirst("select#page")
 			?: doc.selectFirst("select[name=page]")
 
-		val allPageUrls = if (pageSelect != null) {
-			// Use dropdown options to get all page URLs
-			pageSelect.select("option").map { it.attrAsAbsoluteUrl("value") }.distinct()
-		} else {
-			// Get total pages from the download link text (e.g., "1 / 57")
-			val totalPagesText = doc.selectFirst("a.pic_download")?.text()?.substringAfter("/")?.trim()?.toIntOrNull()
-				?: throw ParseException("Page count not found", chapter.url)
+		// Always use the efficient -10-pageNumber.html format
+		// Get total pages from the download link text (e.g., "1 / 57")
+		val totalPagesText = doc.selectFirst("a.pic_download")?.text()?.substringAfter("/")?.trim()?.toIntOrNull()
+			?: throw ParseException("Page count not found", chapter.url)
 
-			// Generate multi-image page URLs (each contains ~10 images)
-			val baseUrl = chapter.url.toAbsoluteUrl(domain)
-			val allUrls = mutableListOf<String>()
+		// Generate multi-image page URLs (each contains ~10 images)
+		val baseUrl = chapter.url.toAbsoluteUrl(domain)
+		val allPageUrls = mutableListOf<String>()
 
-			// Each page contains 10 images, calculate how many pages we need
-			val imagesPerPage = 10
-			val totalPages = (totalPagesText + imagesPerPage - 1) / imagesPerPage // Ceiling division
+		// Each page contains 10 images, calculate how many pages we need
+		val imagesPerPage = 10
+		val totalPages = (totalPagesText + imagesPerPage - 1) / imagesPerPage // Ceiling division
 
-			for (pageNum in 1..totalPages) {
-				// Generate URL: chapter-id-10-pageNumber.html (each page has 10 images)
-				allUrls.add(baseUrl.replace(".html", "-10-$pageNum.html"))
-			}
-			allUrls
+		for (pageNum in 1..totalPages) {
+			// Generate URL: chapter-id-10-pageNumber.html (each page has 10 images)
+			allPageUrls.add(baseUrl.replace(".html", "-10-$pageNum.html"))
 		}
 
 		val allPages = mutableListOf<MangaPage>()

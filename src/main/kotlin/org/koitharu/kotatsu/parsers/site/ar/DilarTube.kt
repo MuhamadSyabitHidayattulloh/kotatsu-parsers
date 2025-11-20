@@ -1,8 +1,7 @@
 package org.koitharu.kotatsu.parsers.site.ar
 
 import okhttp3.Headers
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONArray
 import org.json.JSONObject
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
@@ -144,8 +143,7 @@ internal class DilarTube(context: MangaLoaderContext) :
                 .add("Referer", "https://v2.dilar.tube/")
                 .build()
 
-            val requestBody = jsonBody.toString().toRequestBody("application/json".toMediaType())
-            val response = webClient.httpPost(url, requestBody, headers).parseJson()
+            val response = webClient.httpPost(url.toHttpUrl(), jsonBody, headers).parseJson()
             val rows = response.optJSONArray("rows") ?: response.getJSONArray("series")
 
             return (0 until rows.length()).map { i ->

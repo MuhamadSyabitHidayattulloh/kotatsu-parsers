@@ -2,10 +2,13 @@ package org.koitharu.kotatsu.parsers.site.en
 
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.core.PagedMangaParser
+import org.koitharu.kotatsu.parsers.exception.ParseException
 import org.koitharu.kotatsu.parsers.model.*
 import org.koitharu.kotatsu.parsers.util.*
 import java.text.SimpleDateFormat
@@ -75,7 +78,13 @@ internal class MangaGeko(context: MangaLoaderContext) :
 				}
 			}
 		}
-		val doc = webClient.httpGet(url).parseHtml()
+
+		val doc = if (url.contains("/browse-comics/")) {
+			captureDocument(url)
+		} else {
+			webClient.httpGet(url).parseHtml()
+		}
+
 		return doc.select("li.novel-item").map { div ->
 			val href = div.selectFirstOrThrow("a").attrAsRelativeUrl("href")
 			val author = div.selectFirstOrThrow("h6").text().removePrefix("Author(S): ").nullIfEmpty()
@@ -173,4 +182,48 @@ internal class MangaGeko(context: MangaLoaderContext) :
                 )
             }
     }
+
+	private suspend fun captureDocument(url: String): Document {
+		val script = """
+			(() => {
+				// Check for different types of content
+				const hasMangaList = document.querySelector('li.novel-item') !== null ||
+									 document.querySelector('div.genre-select-i') !== null;
+
+				const hasMangaDetails = document.querySelector('.author') !== null ||
+										document.querySelector('.description') !== null ||
+										document.querySelector('.categories') !== null;
+
+				const hasChapterList = document.querySelector('#chapters') !== null ||
+									   document.querySelector('ul.chapter-list') !== null;
+
+				const hasChapterPages = document.querySelector('center img') !== null;
+
+				// If any expected content is found, stop loading and return HTML
+				if (hasMangaList || hasMangaDetails || hasChapterList || hasChapterPages) {
+					window.stop();
+					const elementsToRemove = document.querySelectorAll('script, iframe, object, embed, style');
+					elementsToRemove.forEach(el => el.remove());
+					return document.documentElement.outerHTML;
+				}
+				return null;
+			})();
+		""".trimIndent()
+
+		val rawHtml = context.evaluateJs(url, script, 30000L) ?: throw ParseException("Failed to load page", url)
+
+		val html = if (rawHtml.startsWith("\"") && rawHtml.endsWith("\"")) {
+			rawHtml.substring(1, rawHtml.length - 1)
+				.replace("\\\"", "\"")
+				.replace("\\n", "\n")
+				.replace("\\r", "\r")
+				.replace("\\t", "\t")
+				.replace(Regex("""\\u([0-9A-Fa-f]{4})""")) { match ->
+					val hexValue = match.groupValues[1]
+					hexValue.toInt(16).toChar().toString()
+				}
+		} else rawHtml
+
+		return Jsoup.parse(html, url)
+	}
 }

@@ -31,20 +31,27 @@ internal class CrowScans(context: MangaLoaderContext) :
 	override val datePattern = "dd MMMM، yyyy"
 
 	override suspend fun loadChapters(mangaUrl: String, document: Document): List<MangaChapter> {
+		println("DEBUG: loadChapters called, found ${document.select("a.chapter-link").size} chapter links")
 		return parseChapters(document)
 	}
 
 	override suspend fun getChapters(manga: Manga, doc: Document): List<MangaChapter> {
+		println("DEBUG: getChapters called, found ${doc.select("a.chapter-link").size} chapter links")
 		return parseChapters(doc)
 	}
 
 	private fun parseChapters(doc: Document): List<MangaChapter> {
 		val dateFormat = SimpleDateFormat(datePattern, sourceLocale)
-		return doc.select("a.chapter-link").mapChapters(reversed = true) { i, a ->
+		val chapters = doc.select("a.chapter-link")
+		println("DEBUG: Found ${chapters.size} chapter elements")
+
+		return chapters.mapChapters(reversed = true) { i, a ->
 			val href = a.attrAsRelativeUrl("href")
 			val title = a.selectFirst(".chapter-title")?.text()?.trim() ?: a.ownText()
 			val dateText = a.selectFirst(".meta-item[time]")?.attr("time")
 				?: a.selectFirst(".meta-item")?.text()
+
+			println("DEBUG: Chapter $i - href: $href, title: $title, dateText: $dateText")
 
 			// Extract chapter number from title or URL
 			val chapterNumber = title.toFloatOrNull()
@@ -142,6 +149,9 @@ internal class CrowScans(context: MangaLoaderContext) :
 
 				const hasMangaDetails = document.querySelector('div.summary_content') !== null ||
 										document.querySelector('.manga-chapters') !== null ||
+										document.querySelector('#manga-chapters-holder') !== null ||
+										document.querySelector('a.chapter-link') !== null ||
+										document.querySelector('div.description') !== null ||
 										document.querySelector('.post-title') !== null;
 
 				// If any expected content is found, stop loading and return HTML
@@ -171,4 +181,6 @@ internal class CrowScans(context: MangaLoaderContext) :
 
 		return Jsoup.parse(html, url)
 	}
+
+	override suspend fun getRelatedManga(seed: Manga): List<Manga> = emptyList()
 }

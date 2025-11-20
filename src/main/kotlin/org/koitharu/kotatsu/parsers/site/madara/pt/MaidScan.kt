@@ -41,7 +41,7 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 	override val configKeyDomain = ConfigKey.Domain("empreguetes.xyz")
 	private val apiUrl = "https://api2.sussytoons.wtf"
 	private val cdnUrl = "https://cdn.sussytoons.site"
-	private val scanId = 1
+	private val scanId = 3
 
 	override val availableSortOrders: Set<SortOrder> = EnumSet.of(
 		SortOrder.UPDATED,

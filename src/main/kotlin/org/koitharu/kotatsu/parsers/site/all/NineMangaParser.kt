@@ -138,7 +138,7 @@ internal abstract class NineMangaParser(
 		
 		val author = infoRoot.select("dd.about-book > p").find { it.text().contains("Autor:", ignoreCase = true) }?.select("a")?.text()
 		val statusText = infoRoot.select("dd.about-book > p").find { it.text().contains("Status:", ignoreCase = true) }?.select("a")?.text()
-		val description = infoRoot.select("dd.short-info > p").find { it.text().contains("Sinopse:", ignoreCase = true) }?.html()?.substringAfter("</span>")
+		val description = infoRoot.selectFirst("dd.short-info p span")?.text()?.trim()
 		
 		return manga.copy(
 			title = infoRoot.selectFirst("h1")?.textOrNull()?.removeSuffix("Manga")?.trimEnd() ?: manga.title,

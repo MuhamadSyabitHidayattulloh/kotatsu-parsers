@@ -196,8 +196,7 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 
 	override suspend fun getDetails(manga: Manga): Manga {
 		val mangaId = manga.url.substringAfter("/obra/").substringBefore("/")
-		val response = webClient.httpGet("$apiUrl/obras/$mangaId", apiHeaders).parseJson()
-		val mangaJson = response.optJSONObject("resultado") ?: throw Exception("Manga not found")
+		val mangaJson = webClient.httpGet("$apiUrl/obras/$mangaId", apiHeaders).parseJson()
 
 		val description = mangaJson.optString("obr_descricao")
 			.replace(Regex("</?strong>"), "")
@@ -210,9 +209,9 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 			?.let { parseStatus(it) }
 
 		val tags = mangaJson.optJSONArray("tags")?.mapJSON { tagJson ->
-			val tagName = tagJson.getString("tag_nome")
+			val tagName = tagJson.getString("nome")
 			MangaTag(
-				key = tagJson.optInt("tag_id").toString(),
+				key = tagJson.optInt("id").toString(),
 				title = tagName.toTitleCase(),
 				source = source,
 			)
@@ -234,24 +233,14 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 	private fun parseChapter(json: JSONObject): MangaChapter {
 		val chapterId = json.getInt("cap_id")
 		val chapterName = json.getString("cap_nome")
-		val chapterDate = json.optString("cap_lancado_em")
-
-		val chapterNumber = json.optDouble("cap_numero").let {
-			if (it > 0) it.toFloat() else {
-				chapterName
-					.substringAfter("Capítulo ", "")
-					.substringBefore(" ")
-					.replace(",", ".")
-					.toFloat()
-			}
-		}
+		val chapterNumber = json.optDouble("cap_numero").toFloat()
 
 		return MangaChapter(
 			id = generateUid(chapterId.toLong()),
 			title = chapterName,
 			number = chapterNumber,
 			url = "/capitulo/$chapterId",
-			uploadDate = chapterDateFormat.parseSafe(chapterDate),
+			uploadDate = 0, // No date field in this API response
 			source = source,
 			volume = 0,
 			scanlator = null,
@@ -260,10 +249,10 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 	}
 
 	private fun parseStatus(status: String): MangaState? = when (status.lowercase()) {
-		"em andamento" -> MangaState.ONGOING
-		"completo" -> MangaState.FINISHED
-		"hiato" -> MangaState.PAUSED
-		"cancelado" -> MangaState.ABANDONED
+		"ativo", "em andamento" -> MangaState.ONGOING
+		"completo", "concluído" -> MangaState.FINISHED
+		"hiato", "pausado" -> MangaState.PAUSED
+		"cancelado", "abandonado" -> MangaState.ABANDONED
 		else -> null
 	}
 

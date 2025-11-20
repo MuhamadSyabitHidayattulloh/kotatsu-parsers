@@ -85,21 +85,23 @@ internal class MangaGeko(context: MangaLoaderContext) :
 			webClient.httpGet(url).parseHtml()
 		}
 
-		return doc.select("li.novel-item").map { div ->
-			val href = div.selectFirstOrThrow("a").attrAsRelativeUrl("href")
-			val author = div.selectFirstOrThrow("h6").text().removePrefix("Author(S): ").nullIfEmpty()
+		return doc.select("article.comic-card").map { article ->
+			val href = article.selectFirstOrThrow("h3.comic-card__title a").attrAsRelativeUrl("href")
+			val title = article.selectFirstOrThrow("h3.comic-card__title a").text()
+			val coverUrl = article.selectFirst("div.comic-card__cover img")?.src() ?: ""
+
 			Manga(
 				id = generateUid(href),
-				title = div.selectFirstOrThrow("h4").text(),
+				title = title,
 				altTitles = emptySet(),
 				url = href,
 				publicUrl = href.toAbsoluteUrl(domain),
 				rating = RATING_UNKNOWN,
 				contentRating = null,
-				coverUrl = div.selectFirstOrThrow("img").src(),
+				coverUrl = coverUrl,
 				tags = emptySet(),
 				state = null,
-				authors = setOfNotNull(author),
+				authors = emptySet(),
 				source = source,
 			)
 		}
@@ -187,7 +189,7 @@ internal class MangaGeko(context: MangaLoaderContext) :
 		val script = """
 			(() => {
 				// Check for different types of content
-				const hasMangaList = document.querySelector('li.novel-item') !== null ||
+				const hasMangaList = document.querySelectorAll('article.comic-card').length > 0 ||
 									 document.querySelector('div.genre-select-i') !== null;
 
 				const hasMangaDetails = document.querySelector('.author') !== null ||

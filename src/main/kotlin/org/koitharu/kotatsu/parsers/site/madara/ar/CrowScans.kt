@@ -147,15 +147,24 @@ internal class CrowScans(context: MangaLoaderContext) :
 									 document.querySelector('div.page-item-detail') !== null ||
 									 document.querySelector('.wp-manga-item') !== null;
 
-				const hasMangaDetails = document.querySelector('div.summary_content') !== null ||
-										document.querySelector('.manga-chapters') !== null ||
-										document.querySelector('#manga-chapters-holder') !== null ||
-										document.querySelector('a.chapter-link') !== null ||
-										document.querySelector('div.description') !== null ||
+				// For manga details, specifically wait for chapters to load
+				const hasChapters = document.querySelectorAll('a.chapter-link').length > 0;
+				const hasBasicDetails = document.querySelector('div.description') !== null ||
 										document.querySelector('.post-title') !== null;
 
-				// If any expected content is found, stop loading and return HTML
-				if (hasReadingContent || hasMangaList || hasMangaDetails) {
+				// If this is a manga details page, wait for chapters to load
+				if (document.querySelector('#manga-chapters-holder') !== null) {
+					if (hasChapters && hasBasicDetails) {
+						window.stop();
+						const elementsToRemove = document.querySelectorAll('script, iframe, object, embed, style');
+						elementsToRemove.forEach(el => el.remove());
+						return document.documentElement.outerHTML;
+					}
+					return null; // Keep waiting for chapters to load
+				}
+
+				// For other content types, return immediately
+				if (hasReadingContent || hasMangaList || hasBasicDetails) {
 					window.stop();
 					const elementsToRemove = document.querySelectorAll('script, iframe, object, embed, style');
 					elementsToRemove.forEach(el => el.remove());

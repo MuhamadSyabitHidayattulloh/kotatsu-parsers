@@ -158,10 +158,11 @@ internal class DilarTube(context: MangaLoaderContext) :
                 .add("Content-Type", "application/json")
                 .add("Accept", "application/json")
                 .add("Referer", "https://v2.dilar.tube/")
-                .removeAll("Content-Encoding")  // Remove gzip encoding header that causes 400 errors
+                .add("Accept-Encoding", "identity")  // Disable response compression
+                .set("Content-Encoding", "identity")  // Explicitly disable content encoding
                 .build()
 
-        // Use string payload method to avoid automatic gzip encoding
+        // Use string payload and try to override automatic gzip
         val response = webClient.httpPost(url.toHttpUrl(), jsonBody.toString(), headers).parseJson()
 
         // Try different possible response structures

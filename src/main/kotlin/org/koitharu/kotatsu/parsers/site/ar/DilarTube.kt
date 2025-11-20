@@ -62,9 +62,11 @@ internal class DilarTube(context: MangaLoaderContext) :
     }
 
     override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
-        val isDefault = filter.query.isNullOrEmpty() && filter.tags.isEmpty() && filter.tagsExclude.isEmpty()
+        // Use GET for default listing (no search query and no tag filters)
+        val hasSearch = !filter.query.isNullOrEmpty()
+        val hasTagFilters = filter.tags.isNotEmpty() || filter.tagsExclude.isNotEmpty()
 
-        if (isDefault) {
+        if (!hasSearch && !hasTagFilters) {
             val url = "https://v2.dilar.tube/api/series/?page=$page"
             val response = webClient.httpGet(url).parseJson()
             val series = response.getJSONArray("series")
@@ -105,37 +107,49 @@ internal class DilarTube(context: MangaLoaderContext) :
                 }
             }
 
-            val seriesTypeIncludeJson = JSONArray()
-            seriesTypeInclude.forEach { seriesTypeIncludeJson.put(it) }
-            val seriesTypeExcludeJson = JSONArray()
-            seriesTypeExclude.forEach { seriesTypeExcludeJson.put(it) }
+            // Build JSON payload exactly as shown in working examples
+            val jsonBody = JSONObject()
 
-            val categoriesIncludeJson = JSONArray()
-            categoriesInclude.forEach { categoriesIncludeJson.put(it) }
-            val categoriesExcludeJson = JSONArray()
-            categoriesExclude.forEach { categoriesExcludeJson.put(it) }
+            // Add query
+            jsonBody.put("query", filter.query ?: "")
 
-            val jsonBody = JSONObject().apply {
-                put("query", filter.query ?: "")
-                put("seriesType", JSONObject().apply {
-                    put("include", seriesTypeIncludeJson)
-                    put("exclude", seriesTypeExcludeJson)
-                })
-                put("oneshot", false)
-                put("categories", JSONObject().apply {
-                    put("include", categoriesIncludeJson)
-                    put("exclude", categoriesExcludeJson)
-                })
-                put("chapters", JSONObject().apply {
-                    put("min", "")
-                    put("max", "")
-                })
-                put("dates", JSONObject().apply {
-                    put("start", JSONObject.NULL)
-                    put("end", JSONObject.NULL)
-                })
-                put("page", page)
-            }
+            // Add seriesType
+            val seriesTypeObject = JSONObject()
+            val seriesTypeIncludeArray = JSONArray()
+            seriesTypeInclude.forEach { seriesTypeIncludeArray.put(it) }
+            val seriesTypeExcludeArray = JSONArray()
+            seriesTypeExclude.forEach { seriesTypeExcludeArray.put(it) }
+            seriesTypeObject.put("include", seriesTypeIncludeArray)
+            seriesTypeObject.put("exclude", seriesTypeExcludeArray)
+            jsonBody.put("seriesType", seriesTypeObject)
+
+            // Add oneshot
+            jsonBody.put("oneshot", false)
+
+            // Add categories
+            val categoriesObject = JSONObject()
+            val categoriesIncludeArray = JSONArray()
+            categoriesInclude.forEach { categoriesIncludeArray.put(it) }
+            val categoriesExcludeArray = JSONArray()
+            categoriesExclude.forEach { categoriesExcludeArray.put(it) }
+            categoriesObject.put("include", categoriesIncludeArray)
+            categoriesObject.put("exclude", categoriesExcludeArray)
+            jsonBody.put("categories", categoriesObject)
+
+            // Add chapters
+            val chaptersObject = JSONObject()
+            chaptersObject.put("min", "")
+            chaptersObject.put("max", "")
+            jsonBody.put("chapters", chaptersObject)
+
+            // Add dates
+            val datesObject = JSONObject()
+            datesObject.put("start", JSONObject.NULL)
+            datesObject.put("end", JSONObject.NULL)
+            jsonBody.put("dates", datesObject)
+
+            // Add page
+            jsonBody.put("page", page)
 
             val headers = Headers.Builder()
                 .add("Content-Type", "application/json")
@@ -143,12 +157,36 @@ internal class DilarTube(context: MangaLoaderContext) :
                 .add("Referer", "https://v2.dilar.tube/")
                 .build()
 
-            val response = webClient.httpPost(url.toHttpUrl(), jsonBody, headers).parseJson()
-            val rows = response.optJSONArray("rows") ?: response.getJSONArray("series")
+            try {
+                val response = webClient.httpPost(url.toHttpUrl(), jsonBody, headers).parseJson()
 
-            return (0 until rows.length()).map { i ->
-                val item = rows.getJSONObject(i)
-                parseMangaFromJson(item)
+                // Try different possible response structures
+                val rows = when {
+                    response.has("series") -> response.getJSONArray("series")
+                    response.has("rows") -> response.getJSONArray("rows")
+                    response.has("data") -> response.getJSONArray("data")
+                    else -> {
+                        // If response is directly an array
+                        if (response.toString().startsWith("[")) {
+                            JSONArray(response.toString())
+                        } else {
+                            JSONArray() // Empty array if structure is unknown
+                        }
+                    }
+                }
+
+                return (0 until rows.length()).map { i ->
+                    val item = rows.getJSONObject(i)
+                    parseMangaFromJson(item)
+                }
+            } catch (e: Exception) {
+                // If POST fails, fall back to GET request for default listing
+                val fallbackUrl = "https://v2.dilar.tube/api/series/?page=$page"
+                val response = webClient.httpGet(fallbackUrl).parseJson()
+                val series = response.getJSONArray("series")
+                return (0 until series.length()).map { i ->
+                    parseMangaFromJson(series.getJSONObject(i))
+                }
             }
         }
     }

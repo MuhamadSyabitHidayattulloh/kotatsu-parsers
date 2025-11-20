@@ -26,8 +26,9 @@ internal class MangaGeko(context: MangaLoaderContext) :
 	override val filterCapabilities: MangaListFilterCapabilities
 		get() = MangaListFilterCapabilities(
 			isSearchSupported = true,
-			isMultipleTagsSupported = true,
-			isTagsExclusionSupported = true,
+			isSearchWithFiltersSupported = true,
+			isMultipleTagsSupported = false, // Only one genre at a time
+			isTagsExclusionSupported = true, // Single genre exclusion supported
 		)
 
 	override suspend fun getFilterOptions() = MangaListFilterOptions(
@@ -43,47 +44,50 @@ internal class MangaGeko(context: MangaLoaderContext) :
 		val url = buildString {
 			append("https://")
 			append(domain)
-			when {
-				!filter.query.isNullOrEmpty() -> {
-					if (page > 1) {
-						return emptyList()
-					}
-					append("/search/?search=")
-					append(filter.query.urlEncoded())
-				}
+			append("/browse-comics/")
 
-				else -> {
+			val params = mutableListOf<String>()
 
-					append("/browse-comics/?results=")
-					append(page)
+			// Add search query
+			if (!filter.query.isNullOrEmpty()) {
+				params.add("q=${filter.query.urlEncoded()}")
+			}
 
-					if (filter.tags.isNotEmpty()) {
-						append("&tags_include=")
-						append(filter.tags.joinToString(separator = ",") { it.key })
-					}
+			// Add page parameter
+			if (page > 1) {
+				params.add("page=$page")
+			} else {
+				params.add("page=1")
+			}
 
-					if (filter.tagsExclude.isNotEmpty()) {
-						append("&tags_exclude=")
-						append(filter.tagsExclude.joinToString(separator = ",") { it.key })
-					}
+			// Add single genre filter (only one genre allowed)
+			if (filter.tags.isNotEmpty()) {
+				val singleTag = filter.tags.first() // Only use the first selected genre
+				params.add("include_genres=${singleTag.key}")
+			}
 
-					append("&filter=")
-					when (order) {
-						SortOrder.POPULARITY -> append("views")
-						SortOrder.UPDATED -> append("Updated")
-						SortOrder.NEWEST -> append("New")
-						// SortOrder.RANDOM -> append("Random")
-						else -> append("Updated")
-					}
-				}
+			// Add single excluded genre (only one genre allowed)
+			if (filter.tagsExclude.isNotEmpty()) {
+				val singleExcludeTag = filter.tagsExclude.first() // Only use the first excluded genre
+				params.add("exclude_genres=${singleExcludeTag.key}")
+			}
+
+			// Add sort filter
+			params.add("filter=" + when (order) {
+				SortOrder.POPULARITY -> "views"
+				SortOrder.UPDATED -> "Updated"
+				SortOrder.NEWEST -> "New"
+				else -> "Updated"
+			})
+
+			// Append parameters
+			if (params.isNotEmpty()) {
+				append("?")
+				append(params.joinToString("&"))
 			}
 		}
 
-		val doc = if (url.contains("/browse-comics/")) {
-			captureDocument(url)
-		} else {
-			webClient.httpGet(url).parseHtml()
-		}
+		val doc = captureDocument(url)
 
 		return doc.select("article.comic-card").map { article ->
 			val href = article.selectFirstOrThrow("h3.comic-card__title a").attrAsRelativeUrl("href")

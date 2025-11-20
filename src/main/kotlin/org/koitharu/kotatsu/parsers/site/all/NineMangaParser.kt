@@ -36,7 +36,7 @@ internal abstract class NineMangaParser(
 
 
 	override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()
-		.add("Accept-Language", "en-US;q=0.7,en;q=0.3")
+		.add("Accept-Language", "fr-FR,fr;q=0.9")
 		.build()
 
 	override val availableSortOrders: Set<SortOrder> = Collections.singleton(
@@ -171,9 +171,21 @@ internal abstract class NineMangaParser(
 	override suspend fun getRelatedManga(seed: Manga): List<Manga> = emptyList()
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-		val doc = captureDocument(chapter.url.toAbsoluteUrl(domain))
-		val pageSelect = doc.selectFirst("select.sl-page") 
-			?: doc.selectFirst("select#page") 
+		// Import cookies from domain and use HTTP request instead of captureDocument
+		val url = chapter.url.toAbsoluteUrl(domain)
+		val cookies = context.cookieJar.getCookies(domain)
+		val headers = getRequestHeaders().newBuilder()
+			.add("Referer", "https://$domain/")
+			.apply {
+				if (cookies.isNotEmpty()) {
+					add("Cookie", cookies.joinToString("; ") { "${it.name}=${it.value}" })
+				}
+			}
+			.build()
+
+		val doc = webClient.httpGet(url, headers).parseHtml()
+		val pageSelect = doc.selectFirst("select.sl-page")
+			?: doc.selectFirst("select#page")
 			?: doc.selectFirst("select[name=page]")
 
 		val pageUrls = if (pageSelect != null) {
@@ -182,7 +194,7 @@ internal abstract class NineMangaParser(
 			val totalPages = doc.selectFirst("a.pic_download")?.text()?.substringAfter("/")?.trim()?.toIntOrNull()
 				?: throw ParseException("Page list not found", chapter.url)
 			(1..totalPages).map { i ->
-				if (i == 1) chapter.url.toAbsoluteUrl(domain) 
+				if (i == 1) chapter.url.toAbsoluteUrl(domain)
 				else chapter.url.toAbsoluteUrl(domain).replace(".html", "-$i.html")
 			}
 		}
@@ -196,17 +208,17 @@ internal abstract class NineMangaParser(
 			pages.add(MangaPage(generateUid(url), url, null, source))
 		}
 
-		// Fetch other pages
+		// Fetch other pages with HTTP requests and cookie importing
 		if (urlsToFetch.isNotEmpty()) {
-			for (url in urlsToFetch) {
-				val pageDoc = captureDocument(url)
+			for (pageUrl in urlsToFetch) {
+				val pageDoc = webClient.httpGet(pageUrl, headers).parseHtml()
 				val images = pageDoc.select("img.manga_pic").map { it.attrAsAbsoluteUrl("src") }
 				images.forEach { imgUrl ->
 					pages.add(MangaPage(generateUid(imgUrl), imgUrl, null, source))
 				}
 			}
 		}
-		
+
 		// If no images found (fallback for single image per page without .manga_pic class?)
 		if (pages.isEmpty()) {
 			// Fallback to old behavior: treat each HTML page as one image page
@@ -222,7 +234,19 @@ internal abstract class NineMangaParser(
 		if (page.url.endsWith(".jpg", true) || page.url.endsWith(".png", true) || page.url.endsWith(".jpeg", true) || page.url.endsWith(".webp", true)) {
 			return page.url
 		}
-		val doc = captureDocument(page.url.toAbsoluteUrl(domain))
+		// Import cookies from domain and use HTTP request instead of captureDocument
+		val url = page.url.toAbsoluteUrl(domain)
+		val cookies = context.cookieJar.getCookies(domain)
+		val headers = getRequestHeaders().newBuilder()
+			.add("Referer", "https://$domain/")
+			.apply {
+				if (cookies.isNotEmpty()) {
+					add("Cookie", cookies.joinToString("; ") { "${it.name}=${it.value}" })
+				}
+			}
+			.build()
+
+		val doc = webClient.httpGet(url, headers).parseHtml()
 		val root = doc.body()
 		return root.selectFirst("img.manga_pic")?.attrAsAbsoluteUrl("src")
 			?: root.selectFirstOrThrow("a.pic_download").attrAsAbsoluteUrl("href")

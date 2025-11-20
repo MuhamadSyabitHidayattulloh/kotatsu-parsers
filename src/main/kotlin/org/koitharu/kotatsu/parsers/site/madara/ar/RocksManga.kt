@@ -34,10 +34,11 @@ import java.util.EnumSet
 
 @MangaSourceParser("ROCKSMANGA", "RocksManga", "ar")
 internal class RocksManga(context: MangaLoaderContext) :
-	MadaraParser(context, MangaParserSource.ROCKSMANGA, "rockscans.org") {
+	MadaraParser(context, MangaParserSource.ROCKSMANGA, "rocksmanga.com") {
 
 	override val withoutAjax = false
 	override val datePattern = "d MMMM yyyy"
+	override val stylePage = ""
 	override val selectBodyPage = "div.reading-content"
 	override val selectPage = "img"
 	override val selectDesc = ".description"
@@ -289,10 +290,14 @@ internal class RocksManga(context: MangaLoaderContext) :
 			doc.parseFailed("No images found with selector '$imageSelector' in container.")
 		}
 
-		return imageElements.map { imgElement ->
-			val absoluteImageUrl = imgElement.requireSrc()
+		return imageElements.mapNotNull { imgElement ->
+			val imageUrl = imgElement.attr("data-src").ifEmpty {
+				imgElement.attr("src")
+			}
 
-			val relativeUrl = absoluteImageUrl.toRelativeUrl(domain)
+			if (imageUrl.isEmpty()) return@mapNotNull null
+
+			val relativeUrl = imageUrl.toRelativeUrl(domain)
 
 			MangaPage(
 				id = generateUid(relativeUrl),

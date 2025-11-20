@@ -37,7 +37,7 @@ internal class DilarTube(context: MangaLoaderContext) :
 
         for (i in 0 until response.length()) {
             val group = response.getJSONObject(i)
-            val groupId = group.getInt("id")
+            val groupId = group.optString("id").toIntOrNull() ?: group.optInt("id")
             val categories = group.getJSONArray("categories")
 
             // Group 3 is "Style" (Manhwa, etc) -> seriesType
@@ -46,9 +46,10 @@ internal class DilarTube(context: MangaLoaderContext) :
 
             for (j in 0 until categories.length()) {
                 val category = categories.getJSONObject(j)
+                val catId = category.optString("id").toIntOrNull() ?: category.optInt("id")
                 tags.add(
                     MangaTag(
-                        key = "$prefix:${category.getInt("id")}",
+                        key = "$prefix:$catId",
                         title = category.getString("name"),
                         source = source,
                     )
@@ -83,7 +84,7 @@ internal class DilarTube(context: MangaLoaderContext) :
                     val id = parts[1].toIntOrNull() ?: return@forEach
                     if (type == "seriesType") {
                         seriesTypeInclude.add(id)
-                    } else {
+                    } else if (type == "categories") {
                         categoriesInclude.add(id)
                     }
                 }
@@ -96,7 +97,7 @@ internal class DilarTube(context: MangaLoaderContext) :
                     val id = parts[1].toIntOrNull() ?: return@forEach
                     if (type == "seriesType") {
                         seriesTypeExclude.add(id)
-                    } else {
+                    } else if (type == "categories") {
                         categoriesExclude.add(id)
                     }
                 }
@@ -148,7 +149,10 @@ internal class DilarTube(context: MangaLoaderContext) :
         val id = json.getInt("id")
         val title = json.getString("title")
         val cover = json.optString("cover").nullIfEmpty()
-        val coverUrl = if (cover != null) "https://v2.dilar.tube/uploads/$cover" else null
+        val coverUrl = if (cover != null) {
+            val coverName = cover.substringBeforeLast('.') + ".webp"
+            "https://dilar.tube/uploads/manga/cover/$id/large_$coverName"
+        } else null
 
         val rating = json.optString("rating", "0.0").toFloatOrNull() ?: 0f
         val normalizedRating = if (rating > 0) rating / 2f else RATING_UNKNOWN
@@ -186,7 +190,10 @@ internal class DilarTube(context: MangaLoaderContext) :
         val summary = json.optString("summary").nullIfEmpty()
         
         val cover = json.optString("cover").nullIfEmpty()
-        val coverUrl = if (cover != null) "https://v2.dilar.tube/uploads/$cover" else manga.coverUrl
+        val coverUrl = if (cover != null) {
+            val coverName = cover.substringBeforeLast('.') + ".webp"
+            "https://dilar.tube/uploads/manga/cover/$id/large_$coverName"
+        } else manga.coverUrl
 
         val statusStr = json.optString("story_status")
         val state = when (statusStr?.lowercase()) {
@@ -284,9 +291,9 @@ internal class DilarTube(context: MangaLoaderContext) :
                 imageUrl
             } else {
                 if (storageKey != null) {
-                    "https://v2.dilar.tube/uploads/$storageKey/$imageUrl"
+                    "https://dilar.tube/uploads/releases/$storageKey/hq/$imageUrl"
                 } else {
-                    "https://v2.dilar.tube/uploads/$imageUrl"
+                    "https://dilar.tube/uploads/$imageUrl"
                 }
             }
 

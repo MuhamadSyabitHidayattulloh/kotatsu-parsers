@@ -11,7 +11,6 @@ import org.koitharu.kotatsu.parsers.site.mmrcms.MmrcmsParser
 import org.koitharu.kotatsu.parsers.util.*
 import java.util.*
 
-@Broken
 @MangaSourceParser("ONMA", "Onma", "ar")
 internal class Onma(context: MangaLoaderContext) :
 	MmrcmsParser(context, MangaParserSource.ONMA, "onma.me") {

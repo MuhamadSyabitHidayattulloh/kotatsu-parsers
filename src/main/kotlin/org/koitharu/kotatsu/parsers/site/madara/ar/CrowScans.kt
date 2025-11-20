@@ -31,27 +31,22 @@ internal class CrowScans(context: MangaLoaderContext) :
 	override val datePattern = "dd MMMM، yyyy"
 
 	override suspend fun loadChapters(mangaUrl: String, document: Document): List<MangaChapter> {
-		println("DEBUG: loadChapters called, found ${document.select("a.chapter-link").size} chapter links")
 		return parseChapters(document)
 	}
 
 	override suspend fun getChapters(manga: Manga, doc: Document): List<MangaChapter> {
-		println("DEBUG: getChapters called, found ${doc.select("a.chapter-link").size} chapter links")
 		return parseChapters(doc)
 	}
 
 	private fun parseChapters(doc: Document): List<MangaChapter> {
 		val dateFormat = SimpleDateFormat(datePattern, sourceLocale)
 		val chapters = doc.select("a.chapter-link")
-		println("DEBUG: Found ${chapters.size} chapter elements")
 
 		return chapters.mapChapters(reversed = true) { i, a ->
 			val href = a.attrAsRelativeUrl("href")
 			val title = a.selectFirst(".chapter-title")?.text()?.trim() ?: a.ownText()
 			val dateText = a.selectFirst(".meta-item[time]")?.attr("time")
 				?: a.selectFirst(".meta-item")?.text()
-
-			println("DEBUG: Chapter $i - href: $href, title: $title, dateText: $dateText")
 
 			// Extract chapter number from title or URL
 			val chapterNumber = title.toFloatOrNull()
@@ -116,7 +111,22 @@ internal class CrowScans(context: MangaLoaderContext) :
 		// Use captureDocument since the site has browser checks
 		val doc = captureDocument(fullUrl)
 
-		// Parse using standard Madara selectors
+		// Try Hadess custom structure first
+		val customImages = doc.select("img.preload-image[data-src]")
+		if (customImages.isNotEmpty()) {
+			return customImages.map { img ->
+				val imageUrl = img.attr("data-src").ifEmpty { img.attr("src") }
+				val relativeUrl = imageUrl.toRelativeUrl(domain)
+				MangaPage(
+					id = generateUid(relativeUrl),
+					url = relativeUrl,
+					preview = null,
+					source = source,
+				)
+			}
+		}
+
+		// Fallback to standard Madara selectors
 		val root = doc.body().selectFirst(selectBodyPage) ?: throw ParseException(
 			"No image found",
 			fullUrl,
@@ -141,6 +151,7 @@ internal class CrowScans(context: MangaLoaderContext) :
 				// Check for different types of content
 				const hasReadingContent = document.querySelector('div.reading-content') !== null ||
 										   document.querySelector('div.page-break') !== null ||
+										   document.querySelectorAll('img.preload-image[data-src]').length > 0 ||
 										   document.querySelector('img[data-src]') !== null;
 
 				const hasMangaList = document.querySelector('div.page-listing-item') !== null ||

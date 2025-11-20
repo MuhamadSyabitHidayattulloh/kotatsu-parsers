@@ -109,10 +109,12 @@ internal class MangaGeko(context: MangaLoaderContext) :
 
 	private suspend fun fetchAvailableTags(): Set<MangaTag> {
 		val doc = webClient.httpGet("https://$domain/browse-comics/").parseHtml()
-		return doc.selectFirstOrThrow("div.genre-select-i").select("label").mapToSet { label ->
+		return doc.select("button.chip[data-group='include_genres']").mapToSet { button ->
+			val value = button.attr("data-value")
+			val title = button.text()
 			MangaTag(
-				key = label.selectFirstOrThrow("input").attr("value"),
-				title = label.text(),
+				key = value,
+				title = title,
 				source = source,
 			)
 		}
@@ -190,7 +192,7 @@ internal class MangaGeko(context: MangaLoaderContext) :
 			(() => {
 				// Check for different types of content
 				const hasMangaList = document.querySelectorAll('article.comic-card').length > 0 ||
-									 document.querySelector('div.genre-select-i') !== null;
+									 document.querySelector('button.chip[data-group="include_genres"]') !== null;
 
 				const hasMangaDetails = document.querySelector('.author') !== null ||
 										document.querySelector('.description') !== null ||

@@ -259,56 +259,26 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
 		val chapterId = chapter.url.substringAfter("/capitulo/")
 
-		val pageHeaders = apiHeaders.newBuilder()
-			.build()
-
 		// Fetch chapter data from API
-		val apiPath = "c9812736812/$chapterId"
-		val response = webClient.httpGet("$apiUrl/$apiPath", pageHeaders).parseJson()
-		val chapterData = response.optJSONObject("resultado") ?: throw Exception("Chapter data not found")
+		val chapterData = webClient.httpGet("$apiUrl/capitulos/$chapterId", apiHeaders).parseJson()
 
 		// Parse pages from the response
 		val pagesArray = chapterData.optJSONArray("cap_paginas")
-			?: chapterData.optJSONArray("paginas")
 			?: throw Exception("No pages found in chapter")
 
-		val mangaId = chapterData.optJSONObject("obra")?.optInt("obr_id")
-			?: throw Exception("Manga ID not found")
-
-		val chapterNumber = chapterData.optDouble("cap_numero").let { num ->
-			when {
-				num > 0 -> {
-					if (num % 1 == 0.0) num.toInt().toString() else num.toString().replace(".", "_")
-				}
-
-				else -> {
-					chapterData.optString("cap_nome", "")
-						.substringAfter("Capítulo ", "")
-						.substringBefore(" ")
-						.replace(",", ".")
-						.replace(".", "_")
-						.ifEmpty { "0" }
-				}
-			}
-		}
-
 		return pagesArray.mapJSONNotNull { pageJson ->
+			val pagePath = pageJson.optString("path")
 			val pageSrc = pageJson.optString("src")
 
-			if (pageSrc.isEmpty()) return@mapJSONNotNull null
+			if (pagePath.isEmpty() && pageSrc.isEmpty()) return@mapJSONNotNull null
 
 			val imageUrl = when {
+				// Use path if available (full CDN path)
+				pagePath.isNotEmpty() -> "$cdnUrl/$pagePath"
 				// Already a full URL
 				pageSrc.startsWith("http") -> pageSrc
-				// WordPress manga path, looks like: "manga_.../hash/001.webp"
-				pageSrc.startsWith("manga_") -> "$cdnUrl/wp-content/uploads/WP-manga/data/$pageSrc"
-				// WordPress legacy path: "wp-content/uploads/..."
-				pageSrc.startsWith("wp-content") -> "$cdnUrl/$pageSrc"
-				// Simple filename (like "001.webp")
-				else -> {
-					val safeChapterNumber = chapterNumber.replace(".", "_")
-					"$cdnUrl/scans/$scanId/obras/$mangaId/capitulos/$safeChapterNumber/$pageSrc"
-				}
+				// Fallback to src
+				else -> "$cdnUrl/$pageSrc"
 			}
 
 			MangaPage(

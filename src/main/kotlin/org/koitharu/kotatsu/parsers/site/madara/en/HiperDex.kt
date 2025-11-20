@@ -8,4 +8,7 @@ import org.koitharu.kotatsu.parsers.site.madara.MadaraParser
 
 @MangaSourceParser("HIPERDEX", "HiperToon", "en", ContentType.HENTAI)
 internal class HiperDex(context: MangaLoaderContext) :
-	MadaraParser(context, MangaParserSource.HIPERDEX, "hiperdex.com", 36)
+	MadaraParser(context, MangaParserSource.HIPERDEX, "hiperdex.com", 36) {
+
+	override val listUrl = ""
+}

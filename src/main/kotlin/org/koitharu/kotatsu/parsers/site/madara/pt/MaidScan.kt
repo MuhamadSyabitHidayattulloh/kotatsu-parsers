@@ -85,59 +85,39 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 	private val chapterDateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", sourceLocale)
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
-		val genId = when {
-			filter.types.oneOrThrowIfMany() == ContentType.HENTAI -> "5"
-			else -> "1"
-		}
-
-		val url = when {
-			!filter.query.isNullOrEmpty() || filter.tags.isNotEmpty() ||
-				filter.states.isNotEmpty() -> buildSearchUrl(page, filter)
-
-			// Popularity rankings
-			order in setOf(
-				SortOrder.POPULARITY,
-				SortOrder.POPULARITY_TODAY,
-				SortOrder.POPULARITY_WEEK,
-				SortOrder.POPULARITY_MONTH,
-			) -> {
-				val period = when (order) {
-					SortOrder.POPULARITY_TODAY -> "dia"
-					SortOrder.POPULARITY_WEEK -> "semana"
-					SortOrder.POPULARITY_MONTH -> "mes"
-					else -> "geral" // all time
-				}
-				"$apiUrl/obras/ranking".toHttpUrl().newBuilder()
-					.addQueryParameter("periodo", period)
-					.addQueryParameter("limite", pageSize.toString())
-					.addQueryParameter("pagina", page.toString())
-					.addQueryParameter("gen_id", genId)
-					.build()
-			}
-			// Default to updated
-			else -> {
-				"$apiUrl/obras/novos-capitulos".toHttpUrl().newBuilder()
-					.addQueryParameter("limite", pageSize.toString())
-					.addQueryParameter("pagina", page.toString())
-					.addQueryParameter("gen_id", genId)
-					.build()
-			}
-		}
+		val url = buildSearchUrl(page, filter, order)
 
 		val response = webClient.httpGet(url, apiHeaders).parseJson()
-		val results = response.optJSONArray("resultados") ?: return emptyList()
+		val results = response.optJSONArray("obras") ?: return emptyList()
 		return results.mapJSON { parseMangaFromJson(it) }
 	}
 
-	private fun buildSearchUrl(page: Int, filter: MangaListFilter): HttpUrl {
-		val builder = "$apiUrl/obras".toHttpUrl().newBuilder()
-			.addQueryParameter("obr_nome", filter.query ?: "")
-			.addQueryParameter("limite", "15")
+	private fun buildSearchUrl(page: Int, filter: MangaListFilter, order: SortOrder): HttpUrl {
+		val builder = "$apiUrl/obras/search".toHttpUrl().newBuilder()
 			.addQueryParameter("pagina", page.toString())
+			.addQueryParameter("limite", pageSize.toString())
+			.addQueryParameter("todos_generos", "1")
 
-		val isHentai = filter.types.firstOrNull() == ContentType.HENTAI
+		// Add search query
+		if (!filter.query.isNullOrEmpty()) {
+			builder.addQueryParameter("obr_nome", filter.query)
+		}
 
-		if (isHentai) builder.addQueryParameter("gen_id", "5") else builder.addQueryParameter("todos_generos", "true")
+		// Add sorting
+		when (order) {
+			SortOrder.UPDATED -> {
+				builder.addQueryParameter("orderBy", "ultima_atualizacao")
+				builder.addQueryParameter("orderDirection", "DESC")
+			}
+			SortOrder.POPULARITY -> {
+				builder.addQueryParameter("orderBy", "media_rating")
+				builder.addQueryParameter("orderDirection", "DESC")
+			}
+			else -> {
+				builder.addQueryParameter("orderBy", "ultima_atualizacao")
+				builder.addQueryParameter("orderDirection", "DESC")
+			}
+		}
 
 		// Add tags
 		filter.tags.forEach { tag ->
@@ -145,11 +125,12 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 		}
 
 		// Add format (content type)
-		filter.types.oneOrThrowIfMany().let { contentType ->
+		filter.types.firstOrNull()?.let { contentType ->
 			val type = when (contentType) {
 				ContentType.MANHWA -> "1"
 				ContentType.MANHUA -> "2"
 				ContentType.MANGA -> "3"
+				ContentType.HENTAI -> "5"
 				else -> null
 			}
 			type?.let { builder.addQueryParameter("formt_id", it) }
@@ -185,8 +166,14 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 			else -> ""
 		}
 
-		val isNsfw = json.optBoolean("obr_mais_18", false)
-		val rating = json.optString("rating").toFloatOrNull()?.div(5f) ?: RATING_UNKNOWN
+		// Get genre information
+		val genero = json.optJSONObject("genero")
+		val genreName = genero?.optString("gen_nome", "") ?: ""
+		val isNsfw = genreName.equals("hentai", ignoreCase = true)
+
+		val rating = json.optDouble("media_rating", 0.0).let {
+			if (it > 0) (it / 5.0).toFloat() else RATING_UNKNOWN
+		}
 
 		return Manga(
 			id = generateUid(id.toLong()),

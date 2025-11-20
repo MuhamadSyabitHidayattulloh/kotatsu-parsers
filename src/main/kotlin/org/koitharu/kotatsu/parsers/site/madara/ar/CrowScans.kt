@@ -42,14 +42,19 @@ internal class CrowScans(context: MangaLoaderContext) :
 		val dateFormat = SimpleDateFormat(datePattern, sourceLocale)
 		return doc.select("a.chapter-link").mapChapters(reversed = true) { i, a ->
 			val href = a.attrAsRelativeUrl("href")
-			val title = a.selectFirst(".chapter-title")?.text() ?: a.ownText()
-			val dateText = a.selectFirst(".meta-item[time]")?.text()
+			val title = a.selectFirst(".chapter-title")?.text()?.trim() ?: a.ownText()
+			val dateText = a.selectFirst(".meta-item[time]")?.attr("time")
 				?: a.selectFirst(".meta-item")?.text()
+
+			// Extract chapter number from title or URL
+			val chapterNumber = title.toFloatOrNull()
+				?: href.substringBeforeLast("/").substringAfterLast("/").toFloatOrNull()
+				?: (i + 1f)
 
 			MangaChapter(
 				id = generateUid(href),
-				title = title,
-				number = i + 1f,
+				title = "Chapter $title",
+				number = chapterNumber,
 				volume = 0,
 				url = href,
 				uploadDate = parseChapterDate(dateFormat, dateText),
@@ -64,7 +69,10 @@ internal class CrowScans(context: MangaLoaderContext) :
 		val fullUrl = manga.url.toAbsoluteUrl(domain)
 		val doc = captureDocument(fullUrl)
 
-		val desc = doc.select(selectDesc).html()
+		// Custom description selector for Hadess
+		val desc = doc.selectFirst("div.description div.description-content")?.html()
+			?: doc.select(selectDesc).html()
+
 		val stateDiv = doc.selectFirst(selectState)?.selectLast("div.summary-content")
 		val state = stateDiv?.let {
 			when (it.text().lowercase()) {

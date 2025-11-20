@@ -62,10 +62,11 @@ internal class DilarTube(context: MangaLoaderContext) :
     }
 
     override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
-        // Use GET for default listing (no search query and no tag filters)
-        val hasSearch = !filter.query.isNullOrEmpty()
+        // Check if we have any actual filters to apply
+        val hasSearch = !filter.query.isNullOrBlank()
         val hasTagFilters = filter.tags.isNotEmpty() || filter.tagsExclude.isNotEmpty()
 
+        // Use GET for default listing only (no search, no tags)
         if (!hasSearch && !hasTagFilters) {
             val url = "https://v2.dilar.tube/api/series/?page=$page"
             val response = webClient.httpGet(url).parseJson()
@@ -73,13 +74,15 @@ internal class DilarTube(context: MangaLoaderContext) :
             return (0 until series.length()).map { i ->
                 parseMangaFromJson(series.getJSONObject(i))
             }
-        } else {
-            val url = "https://v2.dilar.tube/api/search/filter"
+        }
 
-            val seriesTypeInclude = mutableListOf<Int>()
-            val seriesTypeExclude = mutableListOf<Int>()
-            val categoriesInclude = mutableListOf<Int>()
-            val categoriesExclude = mutableListOf<Int>()
+        // Use POST for search and/or tag filtering
+        val url = "https://v2.dilar.tube/api/search/filter"
+
+        val seriesTypeInclude = mutableListOf<Int>()
+        val seriesTypeExclude = mutableListOf<Int>()
+        val categoriesInclude = mutableListOf<Int>()
+        val categoriesExclude = mutableListOf<Int>()
 
             filter.tags.forEach { tag ->
                 val parts = tag.key.split(":")
@@ -157,37 +160,26 @@ internal class DilarTube(context: MangaLoaderContext) :
                 .add("Referer", "https://v2.dilar.tube/")
                 .build()
 
-            try {
-                val response = webClient.httpPost(url.toHttpUrl(), jsonBody, headers).parseJson()
+        val response = webClient.httpPost(url.toHttpUrl(), jsonBody, headers).parseJson()
 
-                // Try different possible response structures
-                val rows = when {
-                    response.has("series") -> response.getJSONArray("series")
-                    response.has("rows") -> response.getJSONArray("rows")
-                    response.has("data") -> response.getJSONArray("data")
-                    else -> {
-                        // If response is directly an array
-                        if (response.toString().startsWith("[")) {
-                            JSONArray(response.toString())
-                        } else {
-                            JSONArray() // Empty array if structure is unknown
-                        }
-                    }
-                }
-
-                return (0 until rows.length()).map { i ->
-                    val item = rows.getJSONObject(i)
-                    parseMangaFromJson(item)
-                }
-            } catch (e: Exception) {
-                // If POST fails, fall back to GET request for default listing
-                val fallbackUrl = "https://v2.dilar.tube/api/series/?page=$page"
-                val response = webClient.httpGet(fallbackUrl).parseJson()
-                val series = response.getJSONArray("series")
-                return (0 until series.length()).map { i ->
-                    parseMangaFromJson(series.getJSONObject(i))
+        // Try different possible response structures
+        val rows = when {
+            response.has("series") -> response.getJSONArray("series")
+            response.has("rows") -> response.getJSONArray("rows")
+            response.has("data") -> response.getJSONArray("data")
+            else -> {
+                // If response is directly an array
+                if (response.toString().startsWith("[")) {
+                    JSONArray(response.toString())
+                } else {
+                    JSONArray() // Empty array if structure is unknown
                 }
             }
+        }
+
+        return (0 until rows.length()).map { i ->
+            val item = rows.getJSONObject(i)
+            parseMangaFromJson(item)
         }
     }
 

@@ -59,67 +59,88 @@ internal class DilarTube(context: MangaLoaderContext) :
     }
 
     override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
-        val url = "https://v2.dilar.tube/api/search/filter"
+        val isDefault = filter.query.isNullOrEmpty() && filter.tags.isEmpty() && filter.tagsExclude.isEmpty()
 
-        val seriesTypeInclude = mutableListOf<Int>()
-        val seriesTypeExclude = mutableListOf<Int>()
-        val categoriesInclude = mutableListOf<Int>()
-        val categoriesExclude = mutableListOf<Int>()
+        if (isDefault) {
+            val url = "https://v2.dilar.tube/api/series/?page=$page"
+            val response = webClient.httpGet(url).parseJson()
+            val series = response.getJSONArray("series")
+            return (0 until series.length()).map { i ->
+                parseMangaFromJson(series.getJSONObject(i))
+            }
+        } else {
+            val url = "https://v2.dilar.tube/api/search/filter"
 
-        filter.tags.forEach { tag ->
-            val parts = tag.key.split(":")
-            if (parts.size == 2) {
-                val type = parts[0]
-                val id = parts[1].toIntOrNull() ?: return@forEach
-                if (type == "seriesType") {
-                    seriesTypeInclude.add(id)
-                } else {
-                    categoriesInclude.add(id)
+            val seriesTypeInclude = mutableListOf<Int>()
+            val seriesTypeExclude = mutableListOf<Int>()
+            val categoriesInclude = mutableListOf<Int>()
+            val categoriesExclude = mutableListOf<Int>()
+
+            filter.tags.forEach { tag ->
+                val parts = tag.key.split(":")
+                if (parts.size == 2) {
+                    val type = parts[0]
+                    val id = parts[1].toIntOrNull() ?: return@forEach
+                    if (type == "seriesType") {
+                        seriesTypeInclude.add(id)
+                    } else {
+                        categoriesInclude.add(id)
+                    }
                 }
             }
-        }
 
-        filter.tagsExclude.forEach { tag ->
-            val parts = tag.key.split(":")
-            if (parts.size == 2) {
-                val type = parts[0]
-                val id = parts[1].toIntOrNull() ?: return@forEach
-                if (type == "seriesType") {
-                    seriesTypeExclude.add(id)
-                } else {
-                    categoriesExclude.add(id)
+            filter.tagsExclude.forEach { tag ->
+                val parts = tag.key.split(":")
+                if (parts.size == 2) {
+                    val type = parts[0]
+                    val id = parts[1].toIntOrNull() ?: return@forEach
+                    if (type == "seriesType") {
+                        seriesTypeExclude.add(id)
+                    } else {
+                        categoriesExclude.add(id)
+                    }
                 }
             }
-        }
 
-        val jsonBody = JSONObject().apply {
-            put("query", filter.query ?: "")
-            put("seriesType", JSONObject().apply {
-                put("include", JSONArray(seriesTypeInclude))
-                put("exclude", JSONArray(seriesTypeExclude))
-            })
-            put("oneshot", false)
-            put("categories", JSONObject().apply {
-                put("include", JSONArray(categoriesInclude))
-                put("exclude", JSONArray(categoriesExclude))
-            })
-            put("chapters", JSONObject().apply {
-                put("min", "")
-                put("max", "")
-            })
-            put("dates", JSONObject().apply {
-                put("start", JSONObject.NULL)
-                put("end", JSONObject.NULL)
-            })
-            put("page", page)
-        }
+            val seriesTypeIncludeJson = JSONArray()
+            seriesTypeInclude.forEach { seriesTypeIncludeJson.put(it) }
+            val seriesTypeExcludeJson = JSONArray()
+            seriesTypeExclude.forEach { seriesTypeExcludeJson.put(it) }
 
-        val response = webClient.httpPost(url, jsonBody).parseJson()
-        val rows = response.getJSONArray("rows")
+            val categoriesIncludeJson = JSONArray()
+            categoriesInclude.forEach { categoriesIncludeJson.put(it) }
+            val categoriesExcludeJson = JSONArray()
+            categoriesExclude.forEach { categoriesExcludeJson.put(it) }
 
-        return (0 until rows.length()).map { i ->
-            val item = rows.getJSONObject(i)
-            parseMangaFromJson(item)
+            val jsonBody = JSONObject().apply {
+                put("query", filter.query ?: "")
+                put("seriesType", JSONObject().apply {
+                    put("include", seriesTypeIncludeJson)
+                    put("exclude", seriesTypeExcludeJson)
+                })
+                put("oneshot", false)
+                put("categories", JSONObject().apply {
+                    put("include", categoriesIncludeJson)
+                    put("exclude", categoriesExcludeJson)
+                })
+                put("chapters", JSONObject().apply {
+                    put("min", "")
+                    put("max", "")
+                })
+                put("dates", JSONObject().apply {
+                    put("start", JSONObject.NULL)
+                    put("end", JSONObject.NULL)
+                })
+                put("page", page)
+            }
+
+            val response = webClient.httpPost(url, jsonBody).parseJson()
+            val rows = response.optJSONArray("rows") ?: response.getJSONArray("series")
+
+            return (0 until rows.length()).map { i ->
+                val item = rows.getJSONObject(i)
+                parseMangaFromJson(item)
+            }
         }
     }
 

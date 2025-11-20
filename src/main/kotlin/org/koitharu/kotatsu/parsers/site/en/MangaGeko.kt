@@ -191,9 +191,22 @@ internal class MangaGeko(context: MangaLoaderContext) :
 		val script = """
 			(() => {
 				// Check for different types of content
-				const hasMangaList = document.querySelectorAll('article.comic-card').length > 0 ||
-									 document.querySelector('button.chip[data-group="include_genres"]') !== null;
+				const resultsContainer = document.querySelector('#results-container');
+				const comicsContainer = document.querySelector('#comics-container');
+				const comicCards = document.querySelectorAll('#results-container article.comic-card');
 
+				// For browse-comics pages, wait for comic cards to be populated in results container
+				if (resultsContainer && comicsContainer) {
+					if (comicCards.length > 0) {
+						window.stop();
+						const elementsToRemove = document.querySelectorAll('script, iframe, object, embed, style');
+						elementsToRemove.forEach(el => el.remove());
+						return document.documentElement.outerHTML;
+					}
+					return null; // Keep waiting for content to load
+				}
+
+				// For other content types (details, chapters, tags)
 				const hasMangaDetails = document.querySelector('.author') !== null ||
 										document.querySelector('.description') !== null ||
 										document.querySelector('.categories') !== null;
@@ -203,8 +216,10 @@ internal class MangaGeko(context: MangaLoaderContext) :
 
 				const hasChapterPages = document.querySelector('center img') !== null;
 
-				// If any expected content is found, stop loading and return HTML
-				if (hasMangaList || hasMangaDetails || hasChapterList || hasChapterPages) {
+				const hasTags = document.querySelector('button.chip[data-group="include_genres"]') !== null;
+
+				// If any other expected content is found, stop loading and return HTML
+				if (hasMangaDetails || hasChapterList || hasChapterPages || hasTags) {
 					window.stop();
 					const elementsToRemove = document.querySelectorAll('script, iframe, object, embed, style');
 					elementsToRemove.forEach(el => el.remove());

@@ -219,7 +219,7 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 
 		val chapters = mangaJson.optJSONArray("capitulos")?.mapJSON { chapterJson ->
 			parseChapter(chapterJson)
-		}?.asReversed() ?: emptyList()
+		} ?: emptyList()
 
 		return manga.copy(
 			title = mangaJson.optString("obr_nome", manga.title),

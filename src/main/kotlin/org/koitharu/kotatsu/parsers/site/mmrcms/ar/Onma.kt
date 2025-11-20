@@ -2,12 +2,14 @@ package org.koitharu.kotatsu.parsers.site.mmrcms.ar
 
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import org.json.JSONObject
 import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.model.*
 import org.koitharu.kotatsu.parsers.site.mmrcms.MmrcmsParser
 import org.koitharu.kotatsu.parsers.util.*
+import org.koitharu.kotatsu.parsers.util.json.mapJSON
 import java.util.*
 
 @MangaSourceParser("ONMA", "Onma", "ar")
@@ -55,7 +57,7 @@ internal class Onma(context: MangaLoaderContext) :
 		val response = webClient.httpGet(url).parseJson()
 		val suggestions = response.optJSONArray("suggestions") ?: return emptyList()
 
-		return suggestions.mapJSON { suggestion ->
+		return suggestions.mapJSON<Manga> { suggestion ->
 			val title = suggestion.getString("value")
 			val slug = suggestion.getString("data")
 			val href = "/manga/$slug"

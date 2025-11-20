@@ -1,5 +1,6 @@
 package org.koitharu.kotatsu.parsers.site.ar
 
+import org.json.JSONArray
 import org.json.JSONObject
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
@@ -94,13 +95,13 @@ internal class DilarTube(context: MangaLoaderContext) :
         val jsonBody = JSONObject().apply {
             put("query", filter.query ?: "")
             put("seriesType", JSONObject().apply {
-                put("include", seriesTypeInclude)
-                put("exclude", seriesTypeExclude)
+                put("include", JSONArray(seriesTypeInclude))
+                put("exclude", JSONArray(seriesTypeExclude))
             })
             put("oneshot", false)
             put("categories", JSONObject().apply {
-                put("include", categoriesInclude)
-                put("exclude", categoriesExclude)
+                put("include", JSONArray(categoriesInclude))
+                put("exclude", JSONArray(categoriesExclude))
             })
             put("chapters", JSONObject().apply {
                 put("min", "")

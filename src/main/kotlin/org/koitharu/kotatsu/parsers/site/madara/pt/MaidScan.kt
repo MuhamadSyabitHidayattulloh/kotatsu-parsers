@@ -209,9 +209,13 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 			?.let { parseStatus(it) }
 
 		val tags = mangaJson.optJSONArray("tags")?.mapJSON { tagJson ->
-			val tagName = tagJson.getString("nome")
+			val tagName = tagJson.optString("tag_nome").ifEmpty {
+				tagJson.optString("nome", "")
+			}
+			val tagId = tagJson.optInt("tag_id").takeIf { it != 0 }
+				?: tagJson.optInt("id", 0)
 			MangaTag(
-				key = tagJson.optInt("id").toString(),
+				key = tagId.toString(),
 				title = tagName.toTitleCase(),
 				source = source,
 			)
@@ -300,9 +304,14 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 		if (tagsArray == null) return emptySet()
 
 		return tagsArray.mapJSON { tagJson ->
+			val tagName = tagJson.optString("tag_nome").ifEmpty {
+				tagJson.optString("nome", "")
+			}
+			val tagId = tagJson.optInt("tag_id").takeIf { it != 0 }
+				?: tagJson.optInt("id", 0)
 			MangaTag(
-				key = tagJson.getInt("tag_id").toString(),
-				title = tagJson.getString("tag_nome").toTitleCase(),
+				key = tagId.toString(),
+				title = tagName.toTitleCase(),
 				source = source,
 			)
 		}.toSet()

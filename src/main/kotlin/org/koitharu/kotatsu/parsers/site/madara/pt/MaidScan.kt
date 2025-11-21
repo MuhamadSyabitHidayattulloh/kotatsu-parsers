@@ -178,8 +178,8 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 		return Manga(
 			id = generateUid(id.toLong()),
 			title = name,
-			url = "/obra/$id/$slug",
-			publicUrl = "https://$domain/obra/$id/$slug",
+			url = "/obras/$slug",
+			publicUrl = "https://$domain/obras/$slug",
 			coverUrl = coverUrl,
 			source = source,
 			rating = rating,
@@ -195,8 +195,8 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 	}
 
 	override suspend fun getDetails(manga: Manga): Manga {
-		val mangaId = manga.url.substringAfter("/obra/").substringBefore("/")
-		val mangaJson = webClient.httpGet("$apiUrl/obras/$mangaId", apiHeaders).parseJson()
+		val mangaSlug = manga.url.substringAfter("/obras/")
+		val mangaJson = webClient.httpGet("$apiUrl/obras/$mangaSlug", apiHeaders).parseJson()
 
 		val description = mangaJson.optString("obr_descricao")
 			.replace(Regex("</?strong>"), "")

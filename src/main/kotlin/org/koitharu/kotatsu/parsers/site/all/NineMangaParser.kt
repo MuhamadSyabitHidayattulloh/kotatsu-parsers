@@ -17,406 +17,280 @@ import java.text.SimpleDateFormat
 import java.util.*
 
 internal abstract class NineMangaParser(
-	context: MangaLoaderContext,
-	source: MangaParserSource,
-	defaultDomain: String,
+    context: MangaLoaderContext,
+    source: MangaParserSource,
+    defaultDomain: String,
 ) : PagedMangaParser(context, source, pageSize = 26) {
 
-	override val configKeyDomain = ConfigKey.Domain(defaultDomain)
+    override val configKeyDomain = ConfigKey.Domain(defaultDomain)
 
-	override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
-		super.onCreateConfig(keys)
-		keys.add(userAgentKey)
-	}
+    override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
+        super.onCreateConfig(keys)
+        keys.add(userAgentKey)
+    }
 
-	init {
-		context.cookieJar.insertCookies(domain, "ninemanga_template_desk=no")
-	}
-
-
-
-	override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()
-		.add("Accept-Language", "fr-FR,fr;q=0.9")
-		.build()
-
-	override val availableSortOrders: Set<SortOrder> = Collections.singleton(
-		SortOrder.POPULARITY,
-	)
-
-	override val filterCapabilities: MangaListFilterCapabilities
-		get() = MangaListFilterCapabilities(
-			isMultipleTagsSupported = true,
-			isTagsExclusionSupported = true,
-			isSearchWithFiltersSupported = true,
-			isSearchSupported = true,
-		)
-
-	override suspend fun getFilterOptions() = MangaListFilterOptions(
-		availableTags = getOrCreateTagMap().values.toSet(),
-		availableStates = EnumSet.of(
-			MangaState.ONGOING,
-			MangaState.FINISHED,
-		),
-	)
+    init {
+        context.cookieJar.insertCookies(domain, "ninemanga_template_desk=no")
+    }
 
 
 
-	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
-		val url = buildString {
-			append("https://")
-			append(domain)
+    override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()
+        .add("Accept-Language", "fr-FR,fr;q=0.9")
+        .build()
 
-			if (filter.tags.isNotEmpty() || filter.tagsExclude.isNotEmpty() || filter.states.isNotEmpty() || !filter.query.isNullOrEmpty()) {
-				append("/search/")
-				append("?page=")
-				append(page.toString())
+    override val availableSortOrders: Set<SortOrder> = Collections.singleton(
+        SortOrder.POPULARITY,
+    )
 
-				append("&name_sel=contain&wd=")
-				append(filter.query?.urlEncoded().orEmpty())
-				append("&author_sel=contain&author=&artist_sel=contain&artist=")
+    override val filterCapabilities: MangaListFilterCapabilities
+        get() = MangaListFilterCapabilities(
+            isMultipleTagsSupported = true,
+            isTagsExclusionSupported = true,
+            isSearchWithFiltersSupported = true,
+            isSearchSupported = true,
+        )
 
-				append("&category_id=")
-				append(filter.tags.joinToString(separator = ",") { it.key })
-
-				append("&out_category_id=")
-				append(filter.tagsExclude.joinToString(separator = ",") { it.key })
-
-				append("&completed_series=")
-				filter.states.oneOrThrowIfMany()?.let {
-					when (it) {
-						MangaState.ONGOING -> append("no")
-						MangaState.FINISHED -> append("yes")
-						else -> append("either")
-					}
-				} ?: append("either")
-				
-				append("&released=0&type=high")
-
-			} else {
-				append("/list/Hot-Book/")
-				if (page > 1) {
-					append("?page=")
-					append(page.toString())
-				}
-			}
-		}
-		val doc = captureDocument(url)
-		val root = doc.body().selectFirstOrThrow("ul#list_container")
-		val baseHost = root.baseUri().toHttpUrl().host
-		return root.select("li").map { node ->
-			val href = node.selectFirstOrThrow("dt > a").attrAsAbsoluteUrl("href")
-			val relUrl = href.toRelativeUrl(baseHost)
-			val dd = node.selectFirst("dd.book-list")
-			Manga(
-				id = generateUid(relUrl),
-				url = relUrl,
-				publicUrl = href,
-				title = dd?.selectFirst("a > b")?.text()?.toCamelCase().orEmpty(),
-				altTitles = emptySet(),
-				coverUrl = node.selectFirst("img")?.src(),
-				rating = RATING_UNKNOWN,
-				authors = emptySet(),
-				contentRating = null,
-				tags = dd?.select("span")?.flatMap { span -> 
-					span.text().split(",").mapNotNull { tag ->
-						tag.trim().takeIf { it.isNotEmpty() }?.let { MangaTag(key = it, title = it, source = source) }
-					} 
-				}?.toSet().orEmpty(),
-				state = null,
-				source = source,
-				description = null,
-			)
-		}
-	}
-
-	override suspend fun getDetails(manga: Manga): Manga {
-		val doc = captureDocument(
-			manga.url.toAbsoluteUrl(domain) + "?waring=1",
-		)
-		val root = doc.body().selectFirstOrThrow("div.book-left")
-		val infoRoot = root.selectFirstOrThrow("div.book-info")
-		
-		val author = infoRoot.select("dd.about-book > p").find { it.text().contains("Autor:", ignoreCase = true) }?.select("a")?.text()
-		val statusText = infoRoot.select("dd.about-book > p").find { it.text().contains("Status:", ignoreCase = true) }?.select("a")?.text()
-		val description = infoRoot.selectFirst("dd.short-info p span")?.text()?.trim()
-		
-		return manga.copy(
-			title = infoRoot.selectFirst("h1")?.textOrNull()?.removeSuffix("Manga")?.trimEnd() ?: manga.title,
-			tags = root.select("ul.inset-menu > li > a").mapNotNullToSet { 
-				val text = it.text()
-				if (text.isNotEmpty()) MangaTag(key = text, title = text, source = source) else null 
-			},
-			authors = setOfNotNull(author),
-			state = statusText?.let { parseStatus(it) },
-			description = description,
-			chapters = root.selectFirst("ul.chapter-box")?.select("li")?.let { chapterElements ->
-				val chapters = mutableListOf<MangaChapter>()
-				for (i in chapterElements.indices) {
-					val li = chapterElements[i]
-					try {
-						// Try both selectors without throwing
-						val a = li.selectFirst("div.chapter-name.long > a") ?: li.selectFirst("div.chapter-name.short > a")
-						if (a != null) {
-							val rawHref = a.attr("href")
-							println("DEBUG: Raw chapter URL extracted: $rawHref")
-							println("DEBUG: Chapter title: ${a.text()}")
-
-							// Reconstruct proper URL if we got a redirect URL (doesn't contain proper domain)
-							val href = if (rawHref.startsWith("http") && !rawHref.contains(domain)) {
-								val chapterId = rawHref.substringAfterLast("/")
-								val chapterTitle = a.text().trim()
-								val cleanTitle = chapterTitle.replace(Regex("""[^\w\s.-]"""), "").replace(" ", "%20")
-								val reconstructedUrl = "/chapter/$cleanTitle/$chapterId.html"
-								println("DEBUG: Reconstructed chapter URL from redirect: $reconstructedUrl")
-								reconstructedUrl
-							} else {
-								rawHref
-							}
-							println("DEBUG: Final chapter URL stored: $href")
-
-							chapters.add(MangaChapter(
-								id = generateUid(href),
-								title = a.text().takeIf { it.isNotEmpty() },
-								number = (i + 1).toFloat(),
-								volume = 0,
-								url = href,
-								uploadDate = parseChapterDateByLang(li.selectFirst("div.add-time > span")?.text().orEmpty()),
-								source = source,
-								scanlator = null,
-								branch = null,
-							))
-						}
-					} catch (e: Exception) {
-						// Skip malformed chapters instead of crashing
-						continue
-					}
-				}
-				chapters.reversed()
-			},
-		)
-	}
-
-	override suspend fun getRelatedManga(seed: Manga): List<Manga> = emptyList()
-
-	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-		println("DEBUG: getPages called with chapter.url: ${chapter.url}")
-
-		// Handle both absolute and relative URLs from chapter parsing
-		val chapterUrl = when {
-			chapter.url.startsWith("https://") -> {
-				// Check if it's a redirect URL that needs reconstruction (doesn't contain proper domain)
-				if (!chapter.url.contains(domain)) {
-					// Reconstruct proper NineManga URL from redirect
-					val chapterId = chapter.url.substringAfterLast("/")
-					val cleanTitle = chapter.title?.replace(Regex("""[^\w\s.-]"""), "")?.replace(" ", "%20") ?: "Unknown"
-					val reconstructedUrl = "https://$domain/chapter/$cleanTitle/$chapterId.html"
-					println("DEBUG: Reconstructed redirect URL from ${chapter.url} to $reconstructedUrl")
-					reconstructedUrl
-				} else {
-					chapter.url
-				}
-			}
-			chapter.url.startsWith("/chapter/") -> {
-				"https://$domain${chapter.url}"
-			}
-			else -> {
-				chapter.url.toAbsoluteUrl(domain)
-			}
-		}
-
-		println("DEBUG: Final chapter URL to request: $chapterUrl")
-
-		val cookies = context.cookieJar.getCookies(domain)
-		val headers = getRequestHeaders().newBuilder()
-			.add("Referer", "https://$domain/")
-			.apply {
-				if (cookies.isNotEmpty()) {
-					add("Cookie", cookies.joinToString("; ") { "${it.name}=${it.value}" })
-				}
-			}
-			.build()
-
-		val doc = webClient.httpGet(chapterUrl, headers).parseHtml()
-
-		// Check for page selector dropdown first
-		val pageSelect = doc.selectFirst("select.change_pic_page")
-			?: doc.selectFirst("select.sl-page")
-			?: doc.selectFirst("select#page")
-			?: doc.selectFirst("select[name=page]")
-
-		// Try to get total pages from the download link text (e.g., "1 / 57")
-		val totalPagesText = doc.selectFirst("a.pic_download")?.text()?.substringAfter("/")?.trim()?.toIntOrNull()
-
-		if (totalPagesText != null) {
-			// Generate multi-image page URLs (each contains ~10 images)
-			val baseUrl = chapter.url.toAbsoluteUrl(domain)
-			val allPageUrls = mutableListOf<String>()
-
-			// Each page contains 10 images, calculate how many pages we need
-			val imagesPerPage = 10
-			val totalPages = (totalPagesText + imagesPerPage - 1) / imagesPerPage // Ceiling division
-
-			for (pageNum in 1..totalPages) {
-				// Generate URL: chapter-id-10-pageNumber.html (each page has 10 images)
-				allPageUrls.add(baseUrl.replace(".html", "-10-$pageNum.html"))
-			}
-
-			val allPages = mutableListOf<MangaPage>()
-
-			// Process all page URLs to collect images in order
-			for (pageUrl in allPageUrls) {
-				val pageDoc = if (pageUrl == chapter.url.toAbsoluteUrl(domain)) {
-					doc // Use already loaded first page
-				} else {
-					try {
-						webClient.httpGet(pageUrl, headers).parseHtml()
-					} catch (e: Exception) {
-						continue // Skip failed pages
-					}
-				}
-
-				// Get ALL images from this page
-				val images = pageDoc.select("img.manga_pic")
-				for (img in images) {
-					val imgUrl = img.attrAsAbsoluteUrl("src")
-					if (imgUrl.isNotEmpty() && !allPages.any { it.url == imgUrl }) {
-						allPages.add(MangaPage(generateUid(imgUrl), imgUrl, null, source))
-					}
-				}
-			}
-
-			// If no images found, fallback to old behavior
-			if (allPages.isEmpty()) {
-				return allPageUrls.map { url ->
-					MangaPage(generateUid(url), url, null, source)
-				}
-			}
-
-			return allPages
-		}
-
-		// Fallback: Check the already-loaded document for script
-		val scriptContent = doc.select("script").find { script ->
-			script.html().contains("all_imgs_url") && script.html().contains("[")
-		}?.html()
-
-		if (scriptContent != null) {
-			val imageUrls = extractImageUrlsFromScript(scriptContent)
-			if (imageUrls.isNotEmpty()) {
-				return imageUrls.mapIndexed { index, imageUrl ->
-					MangaPage(
-						id = generateUid("${chapter.id}-$index"),
-						url = imageUrl,
-						preview = null,
-						source = source
-					)
-				}
-			}
-		}
+    override suspend fun getFilterOptions() = MangaListFilterOptions(
+        availableTags = getOrCreateTagMap().values.toSet(),
+        availableStates = EnumSet.of(
+            MangaState.ONGOING,
+            MangaState.FINISHED,
+        ),
+    )
 
 
-		// Last resort: return empty list instead of crashing
-		return emptyList()
-	}
 
-	private fun extractImageUrlsFromScript(scriptContent: String): List<String> {
-		try {
-			// Find the all_imgs_url array
-			val startIndex = scriptContent.indexOf("all_imgs_url: [")
-			if (startIndex == -1) return emptyList()
+    override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
+        val url = buildString {
+            append("https://")
+            append(domain)
 
-			val arrayStart = startIndex + "all_imgs_url: ".length
-			var depth = 0
-			var inString = false
-			var escape = false
-			var arrayEnd = arrayStart
+            if (filter.tags.isNotEmpty() || filter.tagsExclude.isNotEmpty() || filter.states.isNotEmpty() || !filter.query.isNullOrEmpty()) {
+                append("/search/")
+                append("?page=")
+                append(page.toString())
 
-			// Find the matching closing bracket
-			for (i in arrayStart until scriptContent.length) {
-				val char = scriptContent[i]
+                append("&name_sel=contain&wd=")
+                append(filter.query?.urlEncoded().orEmpty())
+                append("&author_sel=contain&author=&artist_sel=contain&artist=")
 
-				when {
-					escape -> escape = false
-					char == '\\' -> escape = true
-					char == '"' && !escape -> inString = !inString
-					!inString -> {
-						when (char) {
-							'[' -> depth++
-							']' -> {
-								depth--
-								if (depth == 0) {
-									arrayEnd = i + 1
-									break
-								}
-							}
-						}
-					}
-				}
-			}
+                append("&category_id=")
+                append(filter.tags.joinToString(separator = ",") { it.key })
 
-			if (depth != 0) return emptyList()
+                append("&out_category_id=")
+                append(filter.tagsExclude.joinToString(separator = ",") { it.key })
 
-			// Extract the array content
-			val arrayContent = scriptContent.substring(arrayStart, arrayEnd)
+                append("&completed_series=")
+                filter.states.oneOrThrowIfMany()?.let {
+                    when (it) {
+                        MangaState.ONGOING -> append("no")
+                        MangaState.FINISHED -> append("yes")
+                        else -> append("either")
+                    }
+                } ?: append("either")
 
-			// Extract URLs using regex
-			val urlRegex = Regex("""["']([^"']+\.(?:webp|jpg|jpeg|png)[^"']*)["']""")
-			return urlRegex.findAll(arrayContent).map { it.groupValues[1] }.toList()
+                append("&released=0&type=high")
 
-		} catch (e: Exception) {
-			return emptyList()
-		}
-	}
+            } else {
+                append("/list/Hot-Book/")
+                if (page > 1) {
+                    append("?page=")
+                    append(page.toString())
+                }
+            }
+        }
+        val doc = captureDocument(url)
+        val root = doc.body().selectFirstOrThrow("ul#list_container")
+        val baseHost = root.baseUri().toHttpUrl().host
+        return root.select("li").map { node ->
+            val href = node.selectFirstOrThrow("dt > a").attrAsAbsoluteUrl("href")
+            val relUrl = href.toRelativeUrl(baseHost)
+            val dd = node.selectFirst("dd.book-list")
+            Manga(
+                id = generateUid(relUrl),
+                url = relUrl,
+                publicUrl = href,
+                title = dd?.selectFirst("a > b")?.text()?.toCamelCase().orEmpty(),
+                altTitles = emptySet(),
+                coverUrl = node.selectFirst("img")?.src(),
+                rating = RATING_UNKNOWN,
+                authors = emptySet(),
+                contentRating = null,
+                tags = dd?.select("span")?.flatMap { span ->
+                    span.text().split(",").mapNotNull { tag ->
+                        tag.trim().takeIf { it.isNotEmpty() }?.let { MangaTag(key = it, title = it, source = source) }
+                    }
+                }?.toSet().orEmpty(),
+                state = null,
+                source = source,
+                description = null,
+            )
+        }
+    }
 
-	override suspend fun getPageUrl(page: MangaPage): String {
-		// Check if it's already a direct image URL (including ones with query parameters)
-		val urlWithoutQuery = page.url.substringBefore('?')
-		if (urlWithoutQuery.endsWith(".jpg", true) || urlWithoutQuery.endsWith(".png", true) ||
-			urlWithoutQuery.endsWith(".jpeg", true) || urlWithoutQuery.endsWith(".webp", true)) {
-			return page.url
-		}
+    override suspend fun getDetails(manga: Manga): Manga {
+        val doc = captureDocument(
+            manga.url.toAbsoluteUrl(domain) + "?waring=1",
+        )
+        val root = doc.body().selectFirstOrThrow("div.book-left")
+        val infoRoot = root.selectFirstOrThrow("div.book-info")
 
-		val url = page.url.toAbsoluteUrl(domain)
-		val cookies = context.cookieJar.getCookies(domain)
-		val headers = getRequestHeaders().newBuilder()
-			.add("Referer", "https://$domain/")
-			.apply {
-				if (cookies.isNotEmpty()) {
-					add("Cookie", cookies.joinToString("; ") { "${it.name}=${it.value}" })
-				}
-			}
-			.build()
+        val author = infoRoot.select("dd.about-book > p").find { it.text().contains("Autor:", ignoreCase = true) }?.select("a")?.text()
+        val statusText = infoRoot.select("dd.about-book > p").find { it.text().contains("Status:", ignoreCase = true) }?.select("a")?.text()
+        val description = infoRoot.selectFirst("dd.short-info p span")?.text()?.trim()
 
-		val doc = webClient.httpGet(url, headers).parseHtml()
-		val root = doc.body()
-		return root.selectFirst("img.manga_pic")?.attrAsAbsoluteUrl("src")
-			?: root.selectFirst("a.pic_download")?.attrAsAbsoluteUrl("href")
-			?: throw ParseException("Could not find image URL", page.url)
-	}
+        return manga.copy(
+            title = infoRoot.selectFirst("h1")?.textOrNull()?.removeSuffix("Manga")?.trimEnd() ?: manga.title,
+            tags = root.select("ul.inset-menu > li > a").mapNotNullToSet {
+                val text = it.text()
+                if (text.isNotEmpty()) MangaTag(key = text, title = text, source = source) else null
+            },
+            authors = setOfNotNull(author),
+            state = statusText?.let { parseStatus(it) },
+            description = description,
+            chapters = root.selectFirst("ul.chapter-box")?.select("li")
+                ?.mapChapters(reversed = true) { i, li ->
+                    val a = li.selectFirst("div.chapter-name.long > a") ?: li.selectFirstOrThrow("div.chapter-name.short > a")
+                    val href = a.attrAsRelativeUrl("href").replace("%20", " ")
+                    MangaChapter(
+                        id = generateUid(href),
+                        title = a.textOrNull(),
+                        number = i + 1f,
+                        volume = 0,
+                        url = href,
+                        uploadDate = parseChapterDateByLang(li.selectFirst("div.add-time > span")?.text().orEmpty()),
+                        source = source,
+                        scanlator = null,
+                        branch = null,
+                    )
+                },
+        )
+    }
 
-	private var tagCache: ArrayMap<String, MangaTag>? = null
-	private val mutex = Mutex()
+    override suspend fun getRelatedManga(seed: Manga): List<Manga> = emptyList()
 
-	private suspend fun getOrCreateTagMap(): Map<String, MangaTag> = mutex.withLock {
-		tagCache?.let { return@withLock it }
-		val tagMap = ArrayMap<String, MangaTag>()
-		val tagElements = captureDocument("https://${domain}/search/?type=high").select("li.cate_list")
-		for (el in tagElements) {
-			if (el.text().isEmpty()) continue
-			val cateId = el.attr("cate_id")
-			val a = el.selectFirstOrThrow("a")
-			tagMap[el.text()] = MangaTag(
-				title = a.text().toTitleCase(sourceLocale),
-				key = cateId,
-				source = source,
-			)
-		}
-		tagCache = tagMap
-		return@withLock tagMap
-	}
+    override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
+        // Import cookies from domain and use HTTP request instead of captureDocument
+        val url = chapter.url.toAbsoluteUrl(domain)
+        val cookies = context.cookieJar.getCookies(domain)
+        val headers = getRequestHeaders().newBuilder()
+            .add("Referer", "https://$domain/")
+            .apply {
+                if (cookies.isNotEmpty()) {
+                    add("Cookie", cookies.joinToString("; ") { "${it.name}=${it.value}" })
+                }
+            }
+            .build()
 
-	private suspend fun captureDocument(url: String): Document {
-		val script = """
+        val doc = webClient.httpGet(url, headers).parseHtml()
+
+        // Check for page selector dropdown first
+        val pageSelect = doc.selectFirst("select.sl-page")
+            ?: doc.selectFirst("div.changepage select[name=page]")
+            ?: doc.selectFirst("select#page")
+            ?: doc.selectFirst("select[name=page]")
+
+        // Always use the efficient -10-pageNumber.html format
+        // Get total pages from the download link text (e.g., "1 / 57")
+        val totalPagesText = doc.selectFirst("a.pic_download")?.text()?.substringAfter("/")?.trim()?.toIntOrNull()
+            ?: pageSelect?.select("option")?.firstNotNullOfOrNull { option ->
+                option.text().substringAfter("/").trim().toIntOrNull()
+            }
+            ?: throw ParseException("Page count not found", chapter.url)
+
+        // Generate multi-image page URLs (each contains ~10 images)
+        val baseUrl = chapter.url.toAbsoluteUrl(domain)
+        val allPageUrls = mutableListOf<String>()
+
+        // Each page contains 10 images, calculate how many pages we need
+        val imagesPerPage = 10
+        val totalPages = (totalPagesText + imagesPerPage - 1) / imagesPerPage // Ceiling division
+
+        for (pageNum in 1..totalPages) {
+            // Generate URL: chapter-id-10-pageNumber.html (each page has 10 images)
+            allPageUrls.add(baseUrl.replace(".html", "-10-$pageNum.html"))
+        }
+
+        val allPages = mutableListOf<MangaPage>()
+
+        // Process all page URLs to collect images in order
+        for (pageUrl in allPageUrls) {
+            val pageDoc = if (pageUrl == chapter.url.toAbsoluteUrl(domain)) {
+                doc // Use already loaded first page
+            } else {
+                try {
+                    webClient.httpGet(pageUrl, headers).parseHtml()
+                } catch (e: Exception) {
+                    continue // Skip failed pages
+                }
+            }
+
+            // Get ALL images from this page
+            val images = pageDoc.select("img.manga_pic")
+            for (img in images) {
+                val imgUrl = img.attrAsAbsoluteUrl("src")
+                if (imgUrl.isNotEmpty() && !allPages.any { it.url == imgUrl }) {
+                    allPages.add(MangaPage(generateUid(imgUrl), imgUrl, null, source))
+                }
+            }
+        }
+
+        // If no images found, fallback to old behavior
+        if (allPages.isEmpty()) {
+            return allPageUrls.map { url ->
+                MangaPage(generateUid(url), url, null, source)
+            }
+        }
+
+        return allPages
+    }
+
+    override suspend fun getPageUrl(page: MangaPage): String {
+        if (page.url.endsWith(".jpg", true) || page.url.endsWith(".png", true) || page.url.endsWith(".jpeg", true) || page.url.endsWith(".webp", true)) {
+            return page.url
+        }
+        // Import cookies from domain and use HTTP request instead of captureDocument
+        val url = page.url.toAbsoluteUrl(domain)
+        val cookies = context.cookieJar.getCookies(domain)
+        val headers = getRequestHeaders().newBuilder()
+            .add("Referer", "https://$domain/")
+            .apply {
+                if (cookies.isNotEmpty()) {
+                    add("Cookie", cookies.joinToString("; ") { "${it.name}=${it.value}" })
+                }
+            }
+            .build()
+
+        val doc = webClient.httpGet(url, headers).parseHtml()
+        val root = doc.body()
+        return root.selectFirst("img.manga_pic")?.attrAsAbsoluteUrl("src")
+            ?: root.selectFirstOrThrow("a.pic_download").attrAsAbsoluteUrl("href")
+    }
+
+    private var tagCache: ArrayMap<String, MangaTag>? = null
+    private val mutex = Mutex()
+
+    private suspend fun getOrCreateTagMap(): Map<String, MangaTag> = mutex.withLock {
+        tagCache?.let { return@withLock it }
+        val tagMap = ArrayMap<String, MangaTag>()
+        val tagElements = captureDocument("https://${domain}/search/?type=high").select("li.cate_list")
+        for (el in tagElements) {
+            if (el.text().isEmpty()) continue
+            val cateId = el.attr("cate_id")
+            val a = el.selectFirstOrThrow("a")
+            tagMap[el.text()] = MangaTag(
+                title = a.text().toTitleCase(sourceLocale),
+                key = cateId,
+                source = source,
+            )
+        }
+        tagCache = tagMap
+        return@withLock tagMap
+    }
+
+    private suspend fun captureDocument(url: String): Document {
+        val script = """
 			(() => {
 				const title = document.title.toLowerCase();
 				const bodyText = document.body.innerText;
@@ -428,17 +302,6 @@ internal abstract class NineMangaParser(
 
 				if (hasBlockedTitle || hasFake404 || hasActiveChallengeForm || hasChallengeScript) {
 					return "CLOUDFLARE_BLOCKED";
-				}
-
-				// Check for all_imgs_url script first - return immediately if found
-				const scripts = document.querySelectorAll('script');
-				for (let script of scripts) {
-					if (script.innerHTML && script.innerHTML.includes('all_imgs_url') && script.innerHTML.includes('[')) {
-						window.stop();
-						const elementsToRemove = document.querySelectorAll('iframe, object, embed, style');
-						elementsToRemove.forEach(el => el.remove());
-						return document.documentElement.outerHTML;
-					}
 				}
 
 				const hasContent = document.querySelector('ul#list_container') !== null ||
@@ -459,126 +322,140 @@ internal abstract class NineMangaParser(
 			})();
 		""".trimIndent()
 
-		val rawHtml = context.evaluateJs(url, script, 30000L) ?: throw ParseException("Failed to load page", url)
+        val rawHtml = context.evaluateJs(url, script, 30000L) ?: throw ParseException("Failed to load page", url)
 
-		val html = rawHtml.let { raw ->
-			val unquoted = if (raw.startsWith("\"") && raw.endsWith("\"")) {
-				raw.substring(1, raw.length - 1)
-					.replace("\\\"", "\"")
-					.replace("\\n", "\n")
-					.replace("\\r", "\r")
-					.replace("\\t", "\t")
-			} else raw
+        val html = rawHtml.let { raw ->
+            val unquoted = if (raw.startsWith("\"") && raw.endsWith("\"")) {
+                raw.substring(1, raw.length - 1)
+                    .replace("\\\"", "\"")
+                    .replace("\\n", "\n")
+                    .replace("\\r", "\r")
+                    .replace("\\t", "\t")
+            } else raw
 
-			unquoted.replace(Regex("""\\u([0-9A-Fa-f]{4})""")) { match ->
-				val hexValue = match.groupValues[1]
-				hexValue.toInt(16).toChar().toString()
-			}
-		}
+            unquoted.replace(Regex("""\\u([0-9A-Fa-f]{4})""")) { match ->
+                val hexValue = match.groupValues[1]
+                hexValue.toInt(16).toChar().toString()
+            }
+        }
 
-		if (html == "CLOUDFLARE_BLOCKED") {
-			context.requestBrowserAction(this, url)
-			throw ParseException("Cloudflare challenge detected", url)
-		}
+        if (html == "CLOUDFLARE_BLOCKED") {
+            context.requestBrowserAction(this, url)
+            throw ParseException("Cloudflare challenge detected", url)
+        }
 
-		return Jsoup.parse(html, url)
-	}
+        return Jsoup.parse(html, url)
+    }
 
-	private fun parseStatus(status: String) = when {
-		// en
-		status.contains("Ongoing") -> MangaState.ONGOING
-		status.contains("Completed") -> MangaState.FINISHED
-		//es
-		status.contains("En curso") -> MangaState.ONGOING
-		status.contains("Completado") -> MangaState.FINISHED
-		//ru
-		status.contains("постоянный") -> MangaState.ONGOING
-		status.contains("завершенный") -> MangaState.FINISHED
-		//de
-		status.contains("Laufende") -> MangaState.ONGOING
-		status.contains("Abgeschlossen") -> MangaState.FINISHED
-		//pt
-		status.contains("Completo") -> MangaState.ONGOING
-		status.contains("Em tradução") -> MangaState.FINISHED
-		//it
-		status.contains("In corso") -> MangaState.ONGOING
-		status.contains("Completato") -> MangaState.FINISHED
-		//fr
-		status.contains("En cours") -> MangaState.ONGOING
-		status.contains("Complété") -> MangaState.FINISHED
-		else -> null
-	}
+    private fun parseStatus(status: String) = when {
+        // en
+        status.contains("Ongoing") -> MangaState.ONGOING
+        status.contains("Completed") -> MangaState.FINISHED
+        //es
+        status.contains("En curso") -> MangaState.ONGOING
+        status.contains("Completado") -> MangaState.FINISHED
+        //ru
+        status.contains("постоянный") -> MangaState.ONGOING
+        status.contains("завершенный") -> MangaState.FINISHED
+        //de
+        status.contains("Laufende") -> MangaState.ONGOING
+        status.contains("Abgeschlossen") -> MangaState.FINISHED
+        //pt
+        status.contains("Completo") -> MangaState.ONGOING
+        status.contains("Em tradução") -> MangaState.FINISHED
+        //it
+        status.contains("In corso") -> MangaState.ONGOING
+        status.contains("Completato") -> MangaState.FINISHED
+        //fr
+        status.contains("En cours") -> MangaState.ONGOING
+        status.contains("Complété") -> MangaState.FINISHED
+        else -> null
+    }
 
-	private fun parseChapterDateByLang(date: String): Long {
-		if (date.isBlank()) return 0L
+    private fun parseChapterDateByLang(date: String): Long {
+        val dateWords = date.split(" ")
 
-		val dateWords = date.split(" ")
-		if (dateWords.size != 3) return 0L
+        if (dateWords.size == 3) {
+            if (dateWords[1].contains(",")) {
+                SimpleDateFormat("MMM d, yyyy", Locale.ENGLISH).parseSafe(date)
+            } else {
+                val timeAgo = Integer.parseInt(dateWords[0])
+                return Calendar.getInstance().apply {
+                    when (dateWords[1]) {
+                        "minutes" -> Calendar.MINUTE // EN-FR
+                        "hours" -> Calendar.HOUR // EN
 
-		return try {
-			if (dateWords[1].contains(",")) {
-				SimpleDateFormat("MMM d, yyyy", Locale.ENGLISH).parseSafe(date)
-			} else {
-				val timeAgo = dateWords[0].toIntOrNull() ?: return 0L
-				val timeUnit = when (dateWords[1]) {
-					"minutes", "minutos", "минут", "minuti" -> Calendar.MINUTE
-					"hours", "horas", "hora", "часа", "Stunden", "ore", "heures" -> Calendar.HOUR
-					else -> return 0L
-				}
+                        "minutos" -> Calendar.MINUTE // ES
+                        "horas" -> Calendar.HOUR
 
-				System.currentTimeMillis() - (timeAgo * if (timeUnit == Calendar.MINUTE) 60_000L else 3_600_000L)
-			}
-		} catch (e: Exception) {
-			0L
-		}
-	}
+                        // "minutos" -> Calendar.MINUTE // BR
+                        "hora" -> Calendar.HOUR
 
-	@MangaSourceParser("NINEMANGA_EN", "NineManga English", "en")
-	class English(context: MangaLoaderContext) : NineMangaParser(
-		context,
-		MangaParserSource.NINEMANGA_EN,
-		"ninemanga.com",
-	)
+                        "минут" -> Calendar.MINUTE // RU
+                        "часа" -> Calendar.HOUR
 
-	@MangaSourceParser("NINEMANGA_ES", "NineManga Español", "es")
-	class Spanish(context: MangaLoaderContext) : NineMangaParser(
-		context,
-		MangaParserSource.NINEMANGA_ES,
-		"es.ninemanga.com",
-	)
+                        "Stunden" -> Calendar.HOUR // DE
 
-	@MangaSourceParser("NINEMANGA_RU", "NineManga Русский", "ru")
-	class Russian(context: MangaLoaderContext) : NineMangaParser(
-		context,
-		MangaParserSource.NINEMANGA_RU,
-		"ru.ninemanga.com",
-	)
+                        "minuti" -> Calendar.MINUTE // IT
+                        "ore" -> Calendar.HOUR
 
-	@MangaSourceParser("NINEMANGA_DE", "NineManga Deutsch", "de")
-	class Deutsch(context: MangaLoaderContext) : NineMangaParser(
-		context,
-		MangaParserSource.NINEMANGA_DE,
-		"de.ninemanga.com",
-	)
+                        "heures" -> Calendar.HOUR // FR ("minutes" also French word)
+                        else -> null
+                    }?.let {
+                        add(it, -timeAgo)
+                    }
+                }.timeInMillis
+            }
+        }
+        return 0L
+    }
 
-	@MangaSourceParser("NINEMANGA_BR", "NineManga Brasil", "pt")
-	class Brazil(context: MangaLoaderContext) : NineMangaParser(
-		context,
-		MangaParserSource.NINEMANGA_BR,
-		"br.ninemanga.com",
-	)
+    @MangaSourceParser("NINEMANGA_EN", "NineManga English", "en")
+    class English(context: MangaLoaderContext) : NineMangaParser(
+        context,
+        MangaParserSource.NINEMANGA_EN,
+        "ninemanga.com",
+    )
 
-	@MangaSourceParser("NINEMANGA_IT", "NineManga Italiano", "it")
-	class Italiano(context: MangaLoaderContext) : NineMangaParser(
-		context,
-		MangaParserSource.NINEMANGA_IT,
-		"it.ninemanga.com",
-	)
+    @MangaSourceParser("NINEMANGA_ES", "NineManga Español", "es")
+    class Spanish(context: MangaLoaderContext) : NineMangaParser(
+        context,
+        MangaParserSource.NINEMANGA_ES,
+        "es.ninemanga.com",
+    )
 
-	@MangaSourceParser("NINEMANGA_FR", "NineManga Français", "fr")
-	class Francais(context: MangaLoaderContext) : NineMangaParser(
-		context,
-		MangaParserSource.NINEMANGA_FR,
-		"fr.ninemanga.com",
-	)
+    @MangaSourceParser("NINEMANGA_RU", "NineManga Русский", "ru")
+    class Russian(context: MangaLoaderContext) : NineMangaParser(
+        context,
+        MangaParserSource.NINEMANGA_RU,
+        "ru.ninemanga.com",
+    )
+
+    @MangaSourceParser("NINEMANGA_DE", "NineManga Deutsch", "de")
+    class Deutsch(context: MangaLoaderContext) : NineMangaParser(
+        context,
+        MangaParserSource.NINEMANGA_DE,
+        "de.ninemanga.com",
+    )
+
+    @MangaSourceParser("NINEMANGA_BR", "NineManga Brasil", "pt")
+    class Brazil(context: MangaLoaderContext) : NineMangaParser(
+        context,
+        MangaParserSource.NINEMANGA_BR,
+        "br.ninemanga.com",
+    )
+
+    @MangaSourceParser("NINEMANGA_IT", "NineManga Italiano", "it")
+    class Italiano(context: MangaLoaderContext) : NineMangaParser(
+        context,
+        MangaParserSource.NINEMANGA_IT,
+        "it.ninemanga.com",
+    )
+
+    @MangaSourceParser("NINEMANGA_FR", "NineManga Français", "fr")
+    class Francais(context: MangaLoaderContext) : NineMangaParser(
+        context,
+        MangaParserSource.NINEMANGA_FR,
+        "fr.ninemanga.com",
+    )
 }

@@ -149,22 +149,37 @@ internal abstract class NineMangaParser(
 			authors = setOfNotNull(author),
 			state = statusText?.let { parseStatus(it) },
 			description = description,
-			chapters = root.selectFirst("ul.chapter-box")?.select("li")
-				?.mapChapters(reversed = true) { i, li ->
-					val a = li.selectFirst("div.chapter-name.long > a") ?: li.selectFirstOrThrow("div.chapter-name.short > a")
-					val href = a.attrAsRelativeUrl("href").replace("%20", " ")
-					MangaChapter(
-						id = generateUid(href),
-						title = a.textOrNull(),
-						number = i + 1f,
-						volume = 0,
-						url = href,
-						uploadDate = 0L, // Skip date parsing for performance - was causing 1+ minute delay
-						source = source,
-						scanlator = null,
-						branch = null,
-					)
-				},
+			chapters = root.selectFirst("ul.chapter-box")?.select("li")?.let { chapterElements ->
+				val chapters = mutableListOf<MangaChapter>()
+				for (i in chapterElements.indices) {
+					val li = chapterElements[i]
+					try {
+						// Try both selectors without throwing
+						val a = li.selectFirst("div.chapter-name.long > a") ?: li.selectFirst("div.chapter-name.short > a")
+						if (a != null) {
+							val href = a.attr("href").let { url ->
+								if (url.startsWith("http")) url.substringAfter(domain) else url
+							}.replace("%20", " ")
+
+							chapters.add(MangaChapter(
+								id = generateUid(href),
+								title = a.text().takeIf { it.isNotEmpty() },
+								number = (i + 1).toFloat(),
+								volume = 0,
+								url = href,
+								uploadDate = parseChapterDateByLang(li.selectFirst("div.add-time > span")?.text().orEmpty()),
+								source = source,
+								scanlator = null,
+								branch = null,
+							))
+						}
+					} catch (e: Exception) {
+						// Skip malformed chapters instead of crashing
+						continue
+					}
+				}
+				chapters.reversed()
+			},
 		)
 	}
 
@@ -241,23 +256,28 @@ internal abstract class NineMangaParser(
 			return allPages
 		}
 
-		// Fallback: Extract all image URLs from JavaScript all_imgs_url array
-		val scriptContent = doc.select("script").find { script ->
-			script.html().contains("all_imgs_url") && script.html().contains("[")
-		}?.html()
+		// Fallback: Use captureDocument to get fully rendered page, then extract script
+		try {
+			val fullDoc = captureDocument(url)
+			val scriptContent = fullDoc.select("script").find { script ->
+				script.html().contains("all_imgs_url") && script.html().contains("[")
+			}?.html()
 
-		if (scriptContent != null) {
-			val imageUrls = extractImageUrlsFromScript(scriptContent)
-			if (imageUrls.isNotEmpty()) {
-				return imageUrls.mapIndexed { index, imageUrl ->
-					MangaPage(
-						id = generateUid("${chapter.id}-$index"),
-						url = imageUrl,
-						preview = null,
-						source = source
-					)
+			if (scriptContent != null) {
+				val imageUrls = extractImageUrlsFromScript(scriptContent)
+				if (imageUrls.isNotEmpty()) {
+					return imageUrls.mapIndexed { index, imageUrl ->
+						MangaPage(
+							id = generateUid("${chapter.id}-$index"),
+							url = imageUrl,
+							preview = null,
+							source = source
+						)
+					}
 				}
 			}
+		} catch (e: Exception) {
+			// captureDocument failed, continue to fallback
 		}
 
 		// Last resort: return empty list instead of crashing
@@ -370,6 +390,17 @@ internal abstract class NineMangaParser(
 
 				if (hasBlockedTitle || hasFake404 || hasActiveChallengeForm || hasChallengeScript) {
 					return "CLOUDFLARE_BLOCKED";
+				}
+
+				// Check for all_imgs_url script first - return immediately if found
+				const scripts = document.querySelectorAll('script');
+				for (let script of scripts) {
+					if (script.innerHTML && script.innerHTML.includes('all_imgs_url') && script.innerHTML.includes('[')) {
+						window.stop();
+						const elementsToRemove = document.querySelectorAll('iframe, object, embed, style');
+						elementsToRemove.forEach(el => el.remove());
+						return document.documentElement.outerHTML;
+					}
 				}
 
 				const hasContent = document.querySelector('ul#list_container') !== null ||

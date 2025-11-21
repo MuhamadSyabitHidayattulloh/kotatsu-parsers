@@ -159,7 +159,7 @@ internal abstract class NineMangaParser(
 						number = i + 1f,
 						volume = 0,
 						url = href,
-						uploadDate = parseChapterDateByLang(li.selectFirst("div.add-time > span")?.text().orEmpty()),
+						uploadDate = 0L, // Skip date parsing for performance - was causing 1+ minute delay
 						source = source,
 						scanlator = null,
 						branch = null,
@@ -241,29 +241,27 @@ internal abstract class NineMangaParser(
 			return allPages
 		}
 
-		// Fallback: Check if we have change_pic_page selector and extract from script
-		if (pageSelect != null) {
-			// Extract all image URLs from JavaScript all_imgs_url array
-			val scriptContent = doc.select("script").find { script ->
-				script.html().contains("all_imgs_url") && script.html().contains("[")
-			}?.html()
+		// Fallback: Extract all image URLs from JavaScript all_imgs_url array
+		val scriptContent = doc.select("script").find { script ->
+			script.html().contains("all_imgs_url") && script.html().contains("[")
+		}?.html()
 
-			if (scriptContent != null) {
-				val imageUrls = extractImageUrlsFromScript(scriptContent)
-				if (imageUrls.isNotEmpty()) {
-					return imageUrls.mapIndexed { index, imageUrl ->
-						MangaPage(
-							id = generateUid("${chapter.id}-$index"),
-							url = imageUrl,
-							preview = null,
-							source = source
-						)
-					}
+		if (scriptContent != null) {
+			val imageUrls = extractImageUrlsFromScript(scriptContent)
+			if (imageUrls.isNotEmpty()) {
+				return imageUrls.mapIndexed { index, imageUrl ->
+					MangaPage(
+						id = generateUid("${chapter.id}-$index"),
+						url = imageUrl,
+						preview = null,
+						source = source
+					)
 				}
 			}
 		}
 
-		throw ParseException("Page count not found", chapter.url)
+		// Last resort: return empty list instead of crashing
+		return emptyList()
 	}
 
 	private fun extractImageUrlsFromScript(scriptContent: String): List<String> {

@@ -277,10 +277,19 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 			if (pagePath.isEmpty() && pageSrc.isEmpty()) return@mapJSONNotNull null
 
 			val imageUrl = when {
-				// Use path if available (full CDN path)
-				pagePath.isNotEmpty() -> "$cdnUrl/$pagePath"
 				// Already a full URL
 				pageSrc.startsWith("http") -> pageSrc
+				// Path contains full file path (has file extension)
+				pagePath.isNotEmpty() && (pagePath.contains(".jpg") || pagePath.contains(".png") || pagePath.contains(".webp") || pagePath.contains(".jpeg")) -> {
+					"$cdnUrl/$pagePath"
+				}
+				// Path is directory path, combine with src
+				pagePath.isNotEmpty() && pageSrc.isNotEmpty() -> {
+					val cleanPath = pagePath.removePrefix("/")
+					"$cdnUrl/$cleanPath/$pageSrc"
+				}
+				// Use path if available (full CDN path)
+				pagePath.isNotEmpty() -> "$cdnUrl/$pagePath"
 				// Fallback to src
 				else -> "$cdnUrl/$pageSrc"
 			}

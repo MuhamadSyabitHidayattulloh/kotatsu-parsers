@@ -40,7 +40,7 @@ internal class SussyScan(context: MangaLoaderContext) : PagedMangaParser(
 ) {
 	override val configKeyDomain = ConfigKey.Domain("sussytoons.wtf")
 	private val apiUrl = "https://api.sussytoons.wtf"
-	private val cdnUrl = "https://cdn.sussytoons.site"
+	private val cdnUrl = "https://api2.sussytoons.wtf/cdn"
 	private val scanId = 1
 
 	override val availableSortOrders: Set<SortOrder> = EnumSet.of(
@@ -176,13 +176,13 @@ internal class SussyScan(context: MangaLoaderContext) : PagedMangaParser(
 		val slug = json.optString("obr_slug", "").ifEmpty {
 			name.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')
 		}
-		val coverPath = json.optString("obr_imagem", "")
+		val coverPath = json.optString("obr_imagem", "").takeIf { it != "null" && it.isNotEmpty() } ?: ""
 
 		val coverUrl = when {
+			coverPath.isEmpty() -> ""
 			coverPath.startsWith("http") -> coverPath
 			coverPath.startsWith("wp-content") -> "$cdnUrl/$coverPath"
-			coverPath.isNotEmpty() -> "$cdnUrl/scans/$scanId/obras/$id/$coverPath"
-			else -> ""
+			else -> "$cdnUrl/scans/$scanId/obras/$id/$coverPath"
 		}
 
 		val isNsfw = json.optBoolean("obr_mais_18", false)
@@ -283,56 +283,37 @@ internal class SussyScan(context: MangaLoaderContext) : PagedMangaParser(
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
 		val chapterId = chapter.url.substringAfter("/capitulo/")
 
-		val pageHeaders = apiHeaders.newBuilder()
-			.build()
-
 		// Fetch chapter data from API
-		val apiPath = "c9812736812/$chapterId"
-		val response = webClient.httpGet("$apiUrl/$apiPath", pageHeaders).parseJson()
-		val chapterData = response.optJSONObject("resultado") ?: throw Exception("Chapter data not found")
+		val chapterData = webClient.httpGet("https://api2.sussytoons.wtf/capitulos/$chapterId", apiHeaders).parseJson()
 
 		// Parse pages from the response
 		val pagesArray = chapterData.optJSONArray("cap_paginas")
-			?: chapterData.optJSONArray("paginas")
 			?: throw Exception("No pages found in chapter")
 
-		val mangaId = chapterData.optJSONObject("obra")?.optInt("obr_id")
-			?: throw Exception("Manga ID not found")
-
-		val chapterNumber = chapterData.optDouble("cap_numero").let { num ->
-			when {
-				num > 0 -> {
-					if (num % 1 == 0.0) num.toInt().toString() else num.toString().replace(".", "_")
-				}
-
-				else -> {
-					chapterData.optString("cap_nome", "")
-						.substringAfter("Capítulo ", "")
-						.substringBefore(" ")
-						.replace(",", ".")
-						.replace(".", "_")
-						.ifEmpty { "0" }
-				}
-			}
-		}
-
 		return pagesArray.mapJSONNotNull { pageJson ->
+			val pagePath = pageJson.optString("path")
 			val pageSrc = pageJson.optString("src")
 
-			if (pageSrc.isEmpty()) return@mapJSONNotNull null
+			if (pagePath.isEmpty() && pageSrc.isEmpty()) return@mapJSONNotNull null
 
 			val imageUrl = when {
 				// Already a full URL
 				pageSrc.startsWith("http") -> pageSrc
-				// WordPress manga path, looks like: "manga_.../hash/001.webp"
-				pageSrc.startsWith("manga_") -> "$cdnUrl/wp-content/uploads/WP-manga/data/$pageSrc"
-				// WordPress legacy path: "wp-content/uploads/..."
-				pageSrc.startsWith("wp-content") -> "$cdnUrl/$pageSrc"
-				// Simple filename (like "001.webp")
-				else -> {
-					val safeChapterNumber = chapterNumber.replace(".", "_")
-					"$cdnUrl/scans/$scanId/obras/$mangaId/capitulos/$safeChapterNumber/$pageSrc"
+				// Path contains full file path (has file extension)
+				pagePath.isNotEmpty() && (pagePath.contains(".jpg") || pagePath.contains(".png") || pagePath.contains(".webp") || pagePath.contains(".jpeg")) -> {
+					"https://cdn.sussytoons.site/$pagePath"
 				}
+				// Path is directory path, combine with src
+				pagePath.isNotEmpty() && pageSrc.isNotEmpty() -> {
+					val cleanPath = pagePath.removePrefix("/")
+					"https://cdn.sussytoons.site/$cleanPath/$pageSrc"
+				}
+				// WordPress manga path, looks like: "manga_.../hash/001.webp"
+				pageSrc.startsWith("manga_") -> "https://cdn.sussytoons.site/wp-content/uploads/WP-manga/data/$pageSrc"
+				// WordPress legacy path: "wp-content/uploads/..."
+				pageSrc.startsWith("wp-content") -> "https://cdn.sussytoons.site/$pageSrc"
+				// Fallback to src
+				else -> "https://cdn.sussytoons.site/$pageSrc"
 			}
 
 			MangaPage(

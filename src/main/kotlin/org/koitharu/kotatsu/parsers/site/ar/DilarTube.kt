@@ -25,31 +25,13 @@ internal class DilarTube(context: MangaLoaderContext) :
     }
 
     private suspend fun postWithoutGzip(url: String, jsonBody: JSONObject): JSONObject {
-        // Try different header combinations to avoid automatic gzip compression
-        return try {
-            // First try with no Content-Type to see if that avoids gzip
-            val headers = Headers.Builder()
-                .add("Accept", "application/json")
-                .add("Referer", "https://v2.dilar.tube/")
-                .build()
+        // The first attempt works! Just use that
+        val headers = Headers.Builder()
+            .add("Accept", "application/json")
+            .add("Referer", "https://v2.dilar.tube/")
+            .build()
 
-            webClient.httpPost(url.toHttpUrl(), jsonBody, headers).parseJson()
-        } catch (e: Exception) {
-            try {
-                // Fallback: try with explicit Content-Type but different approach
-                val headers = Headers.Builder()
-                    .add("Content-Type", "application/json")
-                    .add("Referer", "https://v2.dilar.tube/")
-                    .build()
-
-                webClient.httpPost(url.toHttpUrl(), jsonBody.toString(), headers).parseJson()
-            } catch (e2: Exception) {
-                // If all POST methods fail, return empty result for graceful degradation
-                JSONObject().apply {
-                    put("series", JSONArray())
-                }
-            }
-        }
+        return webClient.httpPost(url.toHttpUrl(), jsonBody, headers).parseJson()
     }
 
     override val filterCapabilities: MangaListFilterCapabilities
@@ -189,19 +171,11 @@ internal class DilarTube(context: MangaLoaderContext) :
 
         val response = postWithoutGzip(url, jsonBody)
 
-        // Try different possible response structures
+        // Parse the response - search/filter endpoint returns "rows", regular endpoint returns "series"
         val rows = when {
-            response.has("series") -> response.getJSONArray("series")
             response.has("rows") -> response.getJSONArray("rows")
-            response.has("data") -> response.getJSONArray("data")
-            else -> {
-                // If response is directly an array
-                if (response.toString().startsWith("[")) {
-                    JSONArray(response.toString())
-                } else {
-                    JSONArray() // Empty array if structure is unknown
-                }
-            }
+            response.has("series") -> response.getJSONArray("series")
+            else -> JSONArray() // Empty array if no results
         }
 
         return (0 until rows.length()).map { i ->
@@ -213,36 +187,54 @@ internal class DilarTube(context: MangaLoaderContext) :
     private fun parseMangaFromJson(json: JSONObject): Manga {
         val id = json.getInt("id")
         val title = json.getString("title")
-        val cover = json.optString("cover").nullIfEmpty()
-        val coverUrl = if (cover != null) {
-            val coverName = cover.substringBeforeLast('.') + ".webp"
-            "https://dilar.tube/uploads/manga/cover/$id/large_$coverName"
-        } else null
+        val cover = json.optString("cover", "")
+        val summary = json.optString("summary", "")
 
-        val rating = json.optString("rating", "0.0").toFloatOrNull() ?: 0f
-        val normalizedRating = if (rating > 0) rating / 2f else RATING_UNKNOWN
+        // Build cover URL - use https://v2.dilar.tube domain and proper storage path
+        val coverUrl = if (cover.isNotEmpty()) {
+            if (cover.startsWith("http")) {
+                cover
+            } else {
+                "https://v2.dilar.tube/storage/uploads/series/$id/$cover"
+            }
+        } else ""
 
-        val statusStr = json.optString("story_status") ?: json.optString("status")
-        val state = when (statusStr?.lowercase()) {
-            "ongoing" -> MangaState.ONGOING
+        val rating = json.optString("rating", "0.00").toFloatOrNull()?.div(5f) ?: RATING_UNKNOWN
+
+        // Get alternative titles from synonyms
+        val synonyms = json.optJSONObject("synonyms")
+        val altTitles = mutableSetOf<String>()
+        synonyms?.let { syn ->
+            syn.optString("arabic")?.takeIf { it.isNotEmpty() && it != "null" }?.let { altTitles.add(it) }
+            syn.optString("english")?.takeIf { it.isNotEmpty() && it != "null" }?.let { altTitles.add(it) }
+            syn.optString("japanese")?.takeIf { it.isNotEmpty() && it != "null" }?.let { altTitles.add(it) }
+            syn.optString("alternative")?.takeIf { it.isNotEmpty() && it != "null" }?.let { altTitles.add(it) }
+        }
+
+        val status = json.optString("story_status", "")
+        val state = when (status.lowercase()) {
             "completed" -> MangaState.FINISHED
-            "hiatus" -> MangaState.ONGOING
+            "ongoing" -> MangaState.ONGOING
+            "hiatus" -> MangaState.PAUSED
             else -> null
         }
 
         return Manga(
-            id = generateUid(id.toString()),
-            url = "/api/series/$id",
-            publicUrl = "https://dilar.tube/series/$id",
-            coverUrl = coverUrl,
+            id = generateUid(id.toLong()),
             title = title,
-            altTitles = emptySet(),
-            rating = normalizedRating,
-            tags = emptySet(),
-            authors = emptySet(),
-            state = state,
+            url = "/series/$id",
+            publicUrl = "https://v2.dilar.tube/series/$id",
+            coverUrl = coverUrl,
             source = source,
+            rating = rating,
+            altTitles = altTitles,
             contentRating = ContentRating.SAFE,
+            tags = emptySet(),
+            state = state,
+            authors = emptySet(),
+            largeCoverUrl = null,
+            description = summary.takeIf { it.isNotEmpty() },
+            chapters = null,
         )
     }
 

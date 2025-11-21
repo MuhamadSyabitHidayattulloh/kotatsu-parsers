@@ -39,8 +39,9 @@ internal class SussyScan(context: MangaLoaderContext) : PagedMangaParser(
 	searchPageSize = 15,
 ) {
 	override val configKeyDomain = ConfigKey.Domain("sussytoons.wtf")
-	private val apiUrl = "https://api.sussytoons.wtf"
-	private val cdnUrl = "https://api2.sussytoons.wtf/cdn"
+	private val apiUrl = "https://api2.sussytoons.wtf"
+	private val cdnUrl = "https://cdn.sussytoons.site"
+	private val coverCdnUrl = "https://api2.sussytoons.wtf/cdn"
 	private val scanId = 1
 
 	override val availableSortOrders: Set<SortOrder> = EnumSet.of(
@@ -181,8 +182,8 @@ internal class SussyScan(context: MangaLoaderContext) : PagedMangaParser(
 		val coverUrl = when {
 			coverPath.isEmpty() -> null
 			coverPath.startsWith("http") -> coverPath
-			coverPath.startsWith("wp-content") -> "$cdnUrl/$coverPath"
-			else -> "$cdnUrl/scans/$scanId/obras/$id/$coverPath"
+			coverPath.startsWith("wp-content") -> "$coverCdnUrl/$coverPath"
+			else -> "$coverCdnUrl/scans/$scanId/obras/$id/$coverPath"
 		}
 
 		val isNsfw = json.optBoolean("obr_mais_18", false)
@@ -284,7 +285,7 @@ internal class SussyScan(context: MangaLoaderContext) : PagedMangaParser(
 		val chapterId = chapter.url.substringAfter("/capitulo/")
 
 		// Fetch chapter data from API
-		val chapterData = webClient.httpGet("https://api2.sussytoons.wtf/capitulos/$chapterId", apiHeaders).parseJson()
+		val chapterData = webClient.httpGet("$apiUrl/capitulos/$chapterId", apiHeaders).parseJson()
 
 		// Parse pages from the response
 		val pagesArray = chapterData.optJSONArray("cap_paginas")
@@ -301,19 +302,19 @@ internal class SussyScan(context: MangaLoaderContext) : PagedMangaParser(
 				pageSrc.startsWith("http") -> pageSrc
 				// Path contains full file path (has file extension)
 				pagePath.isNotEmpty() && (pagePath.contains(".jpg") || pagePath.contains(".png") || pagePath.contains(".webp") || pagePath.contains(".jpeg")) -> {
-					"https://cdn.sussytoons.site/$pagePath"
+					"$cdnUrl/$pagePath"
 				}
 				// Path is directory path, combine with src
 				pagePath.isNotEmpty() && pageSrc.isNotEmpty() -> {
 					val cleanPath = pagePath.removePrefix("/")
-					"https://cdn.sussytoons.site/$cleanPath/$pageSrc"
+					"$cdnUrl/$cleanPath/$pageSrc"
 				}
 				// WordPress manga path, looks like: "manga_.../hash/001.webp"
-				pageSrc.startsWith("manga_") -> "https://cdn.sussytoons.site/wp-content/uploads/WP-manga/data/$pageSrc"
+				pageSrc.startsWith("manga_") -> "$cdnUrl/wp-content/uploads/WP-manga/data/$pageSrc"
 				// WordPress legacy path: "wp-content/uploads/..."
-				pageSrc.startsWith("wp-content") -> "https://cdn.sussytoons.site/$pageSrc"
+				pageSrc.startsWith("wp-content") -> "$cdnUrl/$pageSrc"
 				// Fallback to src
-				else -> "https://cdn.sussytoons.site/$pageSrc"
+				else -> "$cdnUrl/$pageSrc"
 			}
 
 			MangaPage(

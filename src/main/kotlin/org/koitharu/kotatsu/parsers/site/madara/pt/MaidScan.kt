@@ -288,8 +288,10 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 					val cleanPath = pagePath.removePrefix("/")
 					"$cdnUrl/$cleanPath/$pageSrc"
 				}
-				// Use path if available (full CDN path)
-				pagePath.isNotEmpty() -> "$cdnUrl/$pagePath"
+				// WordPress manga path, looks like: "manga_.../hash/001.webp"
+				pageSrc.startsWith("manga_") -> "$cdnUrl/wp-content/uploads/WP-manga/data/$pageSrc"
+				// WordPress legacy path: "wp-content/uploads/..."
+				pageSrc.startsWith("wp-content") -> "$cdnUrl/$pageSrc"
 				// Fallback to src
 				else -> "$cdnUrl/$pageSrc"
 			}

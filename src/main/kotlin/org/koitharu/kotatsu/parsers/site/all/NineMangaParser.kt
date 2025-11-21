@@ -197,7 +197,12 @@ internal abstract class NineMangaParser(
             ?: pageSelect?.select("option")?.firstNotNullOfOrNull { option ->
                 option.text().substringAfter("/").trim().toIntOrNull()
             }
-            ?: throw ParseException("Page count not found", chapter.url)
+            ?: run {
+                println("DEBUG: Page count not found for ${chapter.url}")
+                println("DEBUG: HTML content:")
+                println(doc.html())
+                throw ParseException("Page count not found", chapter.url)
+            }
 
         // Generate multi-image page URLs (each contains ~10 images)
         val baseUrl = chapter.url.toAbsoluteUrl(domain)

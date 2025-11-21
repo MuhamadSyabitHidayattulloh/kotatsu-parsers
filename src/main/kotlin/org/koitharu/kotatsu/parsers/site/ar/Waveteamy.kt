@@ -203,15 +203,35 @@ internal class Waveteamy(context: MangaLoaderContext) :
         // Try to get description from meta tag as fallback
         val metaDescription = doc.selectFirst("meta[name=description]")?.attr("content")
 
-        // Parse Next.js hydration data
-        val scriptContent = doc.select("script").find {
+        // Parse Next.js hydration data - try multiple patterns
+        val allScripts = doc.select("script")
+
+        // First try: exact pattern we expect
+        var scriptContent = allScripts.find {
             it.html().contains("self.__next_f.push") && it.html().contains("mangaData")
         }?.html()
 
+        // Second try: any script with mangaData (in case the Next.js pattern changed)
         if (scriptContent == null) {
-            // If we can't find the script, return basic manga info with meta description
+            scriptContent = allScripts.find {
+                it.html().contains("mangaData")
+            }?.html()
+        }
+
+        if (scriptContent == null) {
+            // Debug: show what scripts we found and their characteristics
+            val scriptInfo = allScripts.take(5).joinToString("\n") { script ->
+                val html = script.html()
+                "Script ${allScripts.indexOf(script)}: " +
+                "hasNext=${html.contains("__next")}, " +
+                "hasMangaData=${html.contains("mangaData")}, " +
+                "hasChaptersData=${html.contains("chaptersData")}, " +
+                "length=${html.length}, " +
+                "preview='${html.take(100)}...'"
+            }
+
             return manga.copy(
-                description = metaDescription,
+                description = (metaDescription ?: "") + "\n\nDEBUG: No mangaData script found.\nTotal scripts: ${allScripts.size}\n$scriptInfo",
                 chapters = emptyList()
             )
         }
@@ -288,18 +308,31 @@ internal class Waveteamy(context: MangaLoaderContext) :
             )
         } catch (e: Exception) {
             // If JSON extraction fails, try alternative extraction methods
-            // For debugging: add more descriptive error
-            val debugInfo = "JSON extraction failed: ${e.message}, script length: ${scriptContent?.length ?: 0}"
+            val debugInfo = "Main JSON extraction failed: ${e.message}\nScript length: ${scriptContent?.length ?: 0}"
 
             // Try simpler extraction - just look for chaptersData array
-            val fallbackChapters = try {
-                extractChaptersDataDirectly(scriptContent, url)
+            val (fallbackChapters, fallbackError) = try {
+                val chapters = extractChaptersDataDirectly(scriptContent, url)
+                Pair(chapters, if (chapters.isEmpty()) "Fallback extraction found no chapters" else "Fallback extraction found ${chapters.size} chapters")
             } catch (e2: Exception) {
-                emptyList()
+                Pair(emptyList(), "Fallback extraction failed: ${e2.message}")
+            }
+
+            // Show debug info in description to help diagnose
+            val fullDebugInfo = buildString {
+                append(metaDescription ?: "No meta description")
+                append("\n\nDEBUG INFO:")
+                append("\n- $debugInfo")
+                append("\n- $fallbackError")
+                append("\n- Script contains 'mangaData': ${scriptContent?.contains("mangaData") == true}")
+                append("\n- Script contains 'chaptersData': ${scriptContent?.contains("chaptersData") == true}")
+                if (scriptContent != null) {
+                    append("\n- Script preview: ${scriptContent.take(200)}...")
+                }
             }
 
             return manga.copy(
-                description = metaDescription ?: "Failed to extract description: $debugInfo",
+                description = fullDebugInfo,
                 chapters = fallbackChapters
             )
         }

@@ -205,22 +205,33 @@ internal class Waveteamy(context: MangaLoaderContext) :
         // Try to get description from meta tag as fallback
         val metaDescription = doc.selectFirst("meta[name=description]")?.attr("content")
 
-        // Parse Next.js hydration data - try multiple patterns
+        // Parse Next.js hydration data - try multiple scripts systematically
         val allScripts = doc.select("script")
 
-        // ALWAYS add debug info to description to see what's happening
-        val debugInfo = "DEBUG: Found ${allScripts.size} scripts. Script with mangaData: ${allScripts.any { it.html().contains("mangaData") }}. Script with next: ${allScripts.any { it.html().contains("__next") }}"
+        // Find ALL scripts that contain both mangaData and chaptersData
+        val candidateScripts = allScripts.filter { script ->
+            val html = script.html()
+            html.contains("mangaData") && html.contains("chaptersData")
+        }
 
-        // First try: exact pattern we expect
-        var scriptContent = allScripts.find {
-            it.html().contains("self.__next_f.push") && it.html().contains("mangaData")
+        // ALWAYS add debug info to description to see what's happening
+        val debugInfo = buildString {
+            append("DEBUG: Found ${allScripts.size} total scripts, ${candidateScripts.size} with both mangaData+chaptersData")
+            candidateScripts.forEachIndexed { index, script ->
+                val html = script.html()
+                append("\nCandidate $index: hasNext=${html.contains("__next")}, hasEscapedPostId=${html.contains("\\\"postId\\\":")}, length=${html.length}")
+            }
+        }
+
+        // Prioritize scripts with escaped data format (the working format)
+        var scriptContent = candidateScripts.find { script ->
+            val html = script.html()
+            html.contains("\\\"postId\\\":") && html.contains("\\\"chaptersData\\\":[")
         }?.html()
 
-        // Second try: any script with mangaData (in case the Next.js pattern changed)
-        if (scriptContent == null) {
-            scriptContent = allScripts.find {
-                it.html().contains("mangaData")
-            }?.html()
+        // Fallback to any script with both required fields
+        if (scriptContent == null && candidateScripts.isNotEmpty()) {
+            scriptContent = candidateScripts.first().html()
         }
 
         if (scriptContent == null) {
@@ -241,6 +252,39 @@ internal class Waveteamy(context: MangaLoaderContext) :
             )
         }
 
+        // Try the direct escaped extraction method first since it's confirmed to work
+        val (directChapters, directSuccess, directDebug) = try {
+            val chapters = extractChaptersDataDirectly(scriptContent, url)
+            val hasEscapedPostId = scriptContent?.contains("\\\"postId\\\":") == true
+            val hasEscapedChaptersData = scriptContent?.contains("\\\"chaptersData\\\":") == true
+            Triple(chapters, chapters.isNotEmpty(), "Direct extraction: postId=$hasEscapedPostId, chaptersData=$hasEscapedChaptersData, found ${chapters.size} chapters")
+        } catch (e: Exception) {
+            Triple(emptyList(), false, "Direct extraction failed: ${e.message}")
+        }
+
+        if (directSuccess) {
+            // If direct extraction worked, use it and try to get basic manga data too
+            try {
+                val basicMangaData = extractBasicMangaData(scriptContent, url)
+                return manga.copy(
+                    title = basicMangaData?.title ?: manga.title,
+                    description = basicMangaData?.description ?: metaDescription,
+                    coverUrl = basicMangaData?.coverUrl ?: manga.coverUrl,
+                    state = basicMangaData?.state,
+                    authors = basicMangaData?.authors ?: emptySet(),
+                    tags = basicMangaData?.tags ?: emptySet(),
+                    chapters = directChapters,
+                )
+            } catch (e: Exception) {
+                // Even if manga data extraction fails, return with chapters
+                return manga.copy(
+                    description = (metaDescription ?: "No description") + "\n\nDEBUG: $directDebug\nManga data extraction failed: ${e.message}",
+                    chapters = directChapters,
+                )
+            }
+        }
+
+        // If direct extraction failed, try the original JSON extraction method
         try {
             val jsonStr = extractJson(scriptContent, url)
             val json = JSONObject(jsonStr)
@@ -312,36 +356,23 @@ internal class Waveteamy(context: MangaLoaderContext) :
                 chapters = chapters,
             )
         } catch (e: Exception) {
-            // If JSON extraction fails, try alternative extraction methods
-            val debugInfo = "Main JSON extraction failed: ${e.message}\nScript length: ${scriptContent?.length ?: 0}"
-
-            // Try simpler extraction - just look for chaptersData array
-            val (fallbackChapters, fallbackError) = try {
-                val chapters = extractChaptersDataDirectly(scriptContent, url)
-                val hasL16Pattern = scriptContent?.contains("${'$'}L16") == true
-                val hasEscapedPostId = scriptContent?.contains("\\\"postId\\\":") == true
-                val hasEscapedChaptersData = scriptContent?.contains("\\\"chaptersData\\\":") == true
-                Pair(chapters, "Fallback: L16=$hasL16Pattern, escapedPostId=$hasEscapedPostId, escapedChapters=$hasEscapedChaptersData, found ${chapters.size} chapters")
-            } catch (e2: Exception) {
-                Pair(emptyList(), "Fallback extraction failed: ${e2.message}")
-            }
-
-            // Show debug info in description to help diagnose
+            // Both methods failed - show comprehensive debug info
             val fullDebugInfo = buildString {
                 append(metaDescription ?: "No meta description")
                 append("\n\nDEBUG INFO:")
-                append("\n- $debugInfo")
-                append("\n- $fallbackError")
+                append("\n- $directDebug")
+                append("\n- JSON extraction failed: ${e.message}")
+                append("\n- Script length: ${scriptContent?.length ?: 0}")
                 append("\n- Script contains 'mangaData': ${scriptContent?.contains("mangaData") == true}")
                 append("\n- Script contains 'chaptersData': ${scriptContent?.contains("chaptersData") == true}")
                 if (scriptContent != null) {
-                    append("\n- Script preview: ${scriptContent.take(200)}...")
+                    append("\n- Script preview: ${scriptContent.take(300)}...")
                 }
             }
 
             return manga.copy(
                 description = fullDebugInfo,
-                chapters = fallbackChapters
+                chapters = directChapters // Use whatever chapters were extracted, even if empty
             )
         }
     }
@@ -402,24 +433,57 @@ internal class Waveteamy(context: MangaLoaderContext) :
     private fun extractChaptersDataDirectly(scriptContent: String?, url: String): List<MangaChapter> {
         if (scriptContent == null) return emptyList()
 
-        // Look for the specific Next.js pattern containing manga data
-        // Pattern: "$L16",null,{"mangaData":{...},"chaptersData":[...]}
-        val l16Pattern = Regex("""\${'$'}L16.*?null,(\{.*?\})(?=\]\]|${'$'})""", RegexOption.DOT_MATCHES_ALL)
-        val match = l16Pattern.find(scriptContent) ?: return emptyList()
+        // Simple approach: find postId and chaptersData directly in the escaped format
+        val postIdMatch = Regex("""\\\"postId\\\":(\d+)""").find(scriptContent)
+        val postId = postIdMatch?.groupValues?.get(1)?.toLongOrNull() ?: return emptyList()
 
-        val dataJson = match.groupValues[1]
+        // Find chaptersData array in escaped format
+        val chaptersStart = scriptContent.indexOf("\\\"chaptersData\\\":[")
+        if (chaptersStart == -1) return emptyList()
+
+        // Start after the array opening
+        val arrayStart = chaptersStart + "\\\"chaptersData\\\":".length
+
+        // Find the matching closing bracket for the array
+        var depth = 0
+        var inString = false
+        var escape = false
+        var arrayEnd = arrayStart
+
+        for (i in arrayStart until scriptContent.length) {
+            val char = scriptContent[i]
+
+            when {
+                escape -> escape = false
+                char == '\\' -> escape = true
+                char == '"' && !escape -> inString = !inString
+                !inString -> {
+                    when (char) {
+                        '[' -> depth++
+                        ']' -> {
+                            depth--
+                            if (depth == 0) {
+                                arrayEnd = i + 1
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (depth != 0) return emptyList()
+
+        // Extract and unescape the array
+        val chaptersJson = scriptContent.substring(arrayStart, arrayEnd)
             .replace("\\\"", "\"")
             .replace("\\\\", "\\")
 
         try {
-            val json = JSONObject(dataJson)
-            val mangaData = json.optJSONObject("mangaData") ?: return emptyList()
-            val postId = mangaData.getLong("postId")
-            val chaptersData = json.optJSONArray("chaptersData") ?: return emptyList()
-
-            return (0 until chaptersData.length()).mapNotNull { i ->
+            val chaptersArray = org.json.JSONArray(chaptersJson)
+            return (0 until chaptersArray.length()).mapNotNull { i ->
                 try {
-                    val ch = chaptersData.getJSONObject(i)
+                    val ch = chaptersArray.getJSONObject(i)
                     val chId = ch.getInt("id")
                     val chNum = ch.optDouble("chapter", 0.0).toFloat()
                     val chDate = ch.getString("postTime")
@@ -445,6 +509,96 @@ internal class Waveteamy(context: MangaLoaderContext) :
         }
     }
 
+    private data class BasicMangaData(
+        val title: String?,
+        val description: String?,
+        val coverUrl: String?,
+        val state: MangaState?,
+        val authors: Set<String>,
+        val tags: Set<MangaTag>
+    )
+
+    private fun extractBasicMangaData(scriptContent: String?, url: String): BasicMangaData? {
+        if (scriptContent == null) return null
+
+        try {
+            // Find mangaData in escaped format
+            val mangaDataStart = scriptContent.indexOf("\\\"mangaData\\\":{")
+            if (mangaDataStart == -1) return null
+
+            // Start after the key and opening brace
+            val dataStart = mangaDataStart + "\\\"mangaData\\\":".length
+
+            // Find the matching closing brace for the object
+            var depth = 0
+            var inString = false
+            var escape = false
+            var dataEnd = dataStart
+
+            for (i in dataStart until scriptContent.length) {
+                val char = scriptContent[i]
+
+                when {
+                    escape -> escape = false
+                    char == '\\' -> escape = true
+                    char == '"' && !escape -> inString = !inString
+                    !inString -> {
+                        when (char) {
+                            '{' -> depth++
+                            '}' -> {
+                                depth--
+                                if (depth == 0) {
+                                    dataEnd = i + 1
+                                    break
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (depth != 0) return null
+
+            // Extract and unescape the object
+            val mangaDataJson = scriptContent.substring(dataStart, dataEnd)
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\")
+
+            val mangaData = JSONObject(mangaDataJson)
+
+            val title = mangaData.optString("name").takeIf { it.isNotEmpty() }
+            val description = mangaData.optString("story").takeIf { it.isNotEmpty() && it != "null" }
+            val cover = mangaData.optString("cover").takeIf { it.isNotEmpty() }
+            val statusVal = mangaData.optInt("status", -1)
+            val state = when (statusVal) {
+                0 -> MangaState.ONGOING
+                1 -> MangaState.FINISHED
+                else -> null
+            }
+
+            val authors = mutableSetOf<String>()
+            mangaData.optString("author").takeIf { it.isNotEmpty() && it != "null" }?.let { authors.add(it) }
+            mangaData.optString("artist").takeIf { it.isNotEmpty() && it != "null" }?.let { authors.add(it) }
+
+            val genres = mangaData.optJSONArray("genre")?.let { arr ->
+                (0 until arr.length()).mapNotNull { i ->
+                    val g = arr.optString(i)
+                    if (g.isNotEmpty() && g != "null") MangaTag(key = g, title = g, source = source) else null
+                }.toSet()
+            } ?: emptySet()
+
+            return BasicMangaData(
+                title = title,
+                description = description,
+                coverUrl = cover?.let { resolveCover(it) },
+                state = state,
+                authors = authors,
+                tags = genres
+            )
+        } catch (e: Exception) {
+            return null
+        }
+    }
 
     private fun parseDate(dateStr: String): Long {
         if (dateStr.isBlank()) return 0L

@@ -158,8 +158,12 @@ internal abstract class NineMangaParser(
 						val a = li.selectFirst("div.chapter-name.long > a") ?: li.selectFirst("div.chapter-name.short > a")
 						if (a != null) {
 							val href = a.attr("href").let { url ->
-								if (url.startsWith("http")) url.substringAfter(domain) else url
-							}.replace("%20", " ")
+								if (url.startsWith("http")) {
+									// Extract relative URL from absolute URL
+									val path = url.substringAfter("://").substringAfter("/", "")
+									if (path.isNotEmpty()) "/$path" else url
+								} else url
+							}
 
 							chapters.add(MangaChapter(
 								id = generateUid(href),

@@ -2,6 +2,8 @@ package org.koitharu.kotatsu.parsers.site.ar
 
 import okhttp3.FormBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Interceptor
+import okhttp3.Response
 import org.json.JSONObject
 import org.jsoup.Jsoup
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
@@ -23,6 +25,20 @@ internal class Waveteamy(context: MangaLoaderContext) :
     override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
         super.onCreateConfig(keys)
         keys.add(userAgentKey)
+    }
+
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val originalRequest = chain.request()
+
+        // Remove Content-Encoding header from POST requests to avoid gzip compression issues
+        if (originalRequest.method == "POST") {
+            val newRequest = originalRequest.newBuilder()
+                .removeHeader("Content-Encoding")
+                .build()
+            return chain.proceed(newRequest)
+        }
+
+        return chain.proceed(originalRequest)
     }
 
     override val filterCapabilities: MangaListFilterCapabilities

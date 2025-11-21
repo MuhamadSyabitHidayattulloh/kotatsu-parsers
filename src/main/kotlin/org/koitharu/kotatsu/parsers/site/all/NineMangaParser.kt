@@ -184,9 +184,64 @@ internal abstract class NineMangaParser(
 
 		val doc = webClient.httpGet(url, headers).parseHtml()
 
-		// First check for change_pic_page selector (has all_imgs_url script - instant loading)
+		// Check for page selector dropdown first
 		val pageSelect = doc.selectFirst("select.change_pic_page")
+			?: doc.selectFirst("select.sl-page")
+			?: doc.selectFirst("select#page")
+			?: doc.selectFirst("select[name=page]")
 
+		// Try to get total pages from the download link text (e.g., "1 / 57")
+		val totalPagesText = doc.selectFirst("a.pic_download")?.text()?.substringAfter("/")?.trim()?.toIntOrNull()
+
+		if (totalPagesText != null) {
+			// Generate multi-image page URLs (each contains ~10 images)
+			val baseUrl = chapter.url.toAbsoluteUrl(domain)
+			val allPageUrls = mutableListOf<String>()
+
+			// Each page contains 10 images, calculate how many pages we need
+			val imagesPerPage = 10
+			val totalPages = (totalPagesText + imagesPerPage - 1) / imagesPerPage // Ceiling division
+
+			for (pageNum in 1..totalPages) {
+				// Generate URL: chapter-id-10-pageNumber.html (each page has 10 images)
+				allPageUrls.add(baseUrl.replace(".html", "-10-$pageNum.html"))
+			}
+
+			val allPages = mutableListOf<MangaPage>()
+
+			// Process all page URLs to collect images in order
+			for (pageUrl in allPageUrls) {
+				val pageDoc = if (pageUrl == chapter.url.toAbsoluteUrl(domain)) {
+					doc // Use already loaded first page
+				} else {
+					try {
+						webClient.httpGet(pageUrl, headers).parseHtml()
+					} catch (e: Exception) {
+						continue // Skip failed pages
+					}
+				}
+
+				// Get ALL images from this page
+				val images = pageDoc.select("img.manga_pic")
+				for (img in images) {
+					val imgUrl = img.attrAsAbsoluteUrl("src")
+					if (imgUrl.isNotEmpty() && !allPages.any { it.url == imgUrl }) {
+						allPages.add(MangaPage(generateUid(imgUrl), imgUrl, null, source))
+					}
+				}
+			}
+
+			// If no images found, fallback to old behavior
+			if (allPages.isEmpty()) {
+				return allPageUrls.map { url ->
+					MangaPage(generateUid(url), url, null, source)
+				}
+			}
+
+			return allPages
+		}
+
+		// Fallback: Check if we have change_pic_page selector and extract from script
 		if (pageSelect != null) {
 			// Extract all image URLs from JavaScript all_imgs_url array
 			val scriptContent = doc.select("script").find { script ->
@@ -208,28 +263,7 @@ internal abstract class NineMangaParser(
 			}
 		}
 
-		// Fallback: Use download link method (requires loading individual pages)
-		val downloadLinkPages = doc.selectFirst("a.pic_download")?.text()?.substringAfter("/")?.trim()?.toIntOrNull()
-			?: doc.selectFirst("select.sl-page")?.select("option")?.size
-			?: doc.selectFirst("select#page")?.select("option")?.size
-			?: doc.selectFirst("select[name=page]")?.select("option")?.size
-			?: throw ParseException("Page count not found", chapter.url)
-
-		// Use individual page method (slower but works when script method not available)
-		return (1..downloadLinkPages).map { pageNum ->
-			val pageUrl = if (pageNum == 1) {
-				url
-			} else {
-				url.replace(".html", "-$pageNum.html")
-			}
-
-			MangaPage(
-				id = generateUid(pageUrl),
-				url = pageUrl,
-				preview = null,
-				source = source
-			)
-		}
+		throw ParseException("Page count not found", chapter.url)
 	}
 
 	private fun extractImageUrlsFromScript(scriptContent: String): List<String> {
@@ -300,7 +334,8 @@ internal abstract class NineMangaParser(
 		val doc = webClient.httpGet(url, headers).parseHtml()
 		val root = doc.body()
 		return root.selectFirst("img.manga_pic")?.attrAsAbsoluteUrl("src")
-			?: root.selectFirstOrThrow("a.pic_download").attrAsAbsoluteUrl("href")
+			?: root.selectFirst("a.pic_download")?.attrAsAbsoluteUrl("href")
+			?: throw ParseException("Could not find image URL", page.url)
 	}
 
 	private var tagCache: ArrayMap<String, MangaTag>? = null

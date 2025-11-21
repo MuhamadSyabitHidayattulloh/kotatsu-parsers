@@ -183,7 +183,26 @@ internal abstract class NineMangaParser(
             }
             .build()
 
-        val doc = webClient.httpGet(url, headers).parseHtml()
+        val response = webClient.httpGet(url, headers)
+        var doc = response.parseHtml()
+
+        // Check if we've been redirected to a source selection page
+        val responseUrl = response.request.url.host
+        if (!responseUrl.contains("ninemanga", ignoreCase = true)) {
+            // Look for source selection buttons
+            val sourceLink = doc.selectFirst("a.vision-button[href*=esninemanga], a.cool-blue[href*=esninemanga]")?.attr("href")
+            if (sourceLink != null) {
+                // Clean up the URL (remove &amp; and replace with &)
+                val cleanUrl = sourceLink.replace("&amp;", "&")
+                println("DEBUG: Found source selection page, following source: $cleanUrl")
+
+                // Follow the source redirect
+                val sourceResponse = webClient.httpGet(cleanUrl, headers)
+                doc = sourceResponse.parseHtml()
+            } else {
+                throw ParseException("Redirected to wrong domain: $responseUrl", chapter.url)
+            }
+        }
 
         // Check for page selector dropdown first
         val pageSelect = doc.selectFirst("select.sl-page")
@@ -225,7 +244,25 @@ internal abstract class NineMangaParser(
                 doc // Use already loaded first page
             } else {
                 try {
-                    webClient.httpGet(pageUrl, headers).parseHtml()
+                    val pageResponse = webClient.httpGet(pageUrl, headers)
+                    var pageDoc = pageResponse.parseHtml()
+
+                    // Check if we've been redirected to a source selection page
+                    val pageResponseUrl = pageResponse.request.url.host
+                    if (!pageResponseUrl.contains("ninemanga", ignoreCase = true)) {
+                        // Look for source selection buttons
+                        val sourceLink = pageDoc.selectFirst("a.vision-button[href*=esninemanga], a.cool-blue[href*=esninemanga]")?.attr("href")
+                        if (sourceLink != null) {
+                            // Clean up the URL and follow source redirect
+                            val cleanUrl = sourceLink.replace("&amp;", "&")
+                            val sourceResponse = webClient.httpGet(cleanUrl, headers)
+                            pageDoc = sourceResponse.parseHtml()
+                        } else {
+                            continue // Skip pages that redirect to wrong domain
+                        }
+                    }
+
+                    pageDoc
                 } catch (e: Exception) {
                     continue // Skip failed pages
                 }
@@ -241,8 +278,63 @@ internal abstract class NineMangaParser(
             }
         }
 
-        // If no images found, fallback to old behavior
+        // If no images found, check for multi-page dropdown fallback
         if (allPages.isEmpty()) {
+            pageSelect?.let { select ->
+                val fallbackPages = mutableListOf<MangaPage>()
+                val options = select.select("option")
+
+                for (option in options) {
+                    val pageUrl = option.attr("value")
+                    if (pageUrl.isNotEmpty()) {
+                        val fullPageUrl = if (pageUrl.startsWith("/")) {
+                            "https://$domain$pageUrl"
+                        } else if (pageUrl.startsWith("http")) {
+                            pageUrl
+                        } else {
+                            continue
+                        }
+
+                        try {
+                            val pageResponse = webClient.httpGet(fullPageUrl, headers)
+                            var pageDoc = pageResponse.parseHtml()
+
+                            // Check if we've been redirected to a source selection page
+                            val pageResponseUrl = pageResponse.request.url.host
+                            if (!pageResponseUrl.contains("ninemanga", ignoreCase = true)) {
+                                // Look for source selection buttons
+                                val sourceLink = pageDoc.selectFirst("a.vision-button[href*=esninemanga], a.cool-blue[href*=esninemanga]")?.attr("href")
+                                if (sourceLink != null) {
+                                    // Clean up the URL and follow source redirect
+                                    val cleanUrl = sourceLink.replace("&amp;", "&")
+                                    val sourceResponse = webClient.httpGet(cleanUrl, headers)
+                                    pageDoc = sourceResponse.parseHtml()
+                                } else {
+                                    continue // Skip pages that redirect to wrong domain
+                                }
+                            }
+
+                            val images = pageDoc.select("img.manga_pic")
+
+                            for (img in images) {
+                                val imgUrl = img.attrAsAbsoluteUrl("src")
+                                if (imgUrl.isNotEmpty() && !fallbackPages.any { it.url == imgUrl }) {
+                                    fallbackPages.add(MangaPage(generateUid(imgUrl), imgUrl, null, source))
+                                }
+                            }
+                        } catch (e: Exception) {
+                            // If we can't get images from this page, add it as a page URL
+                            fallbackPages.add(MangaPage(generateUid(fullPageUrl), fullPageUrl, null, source))
+                        }
+                    }
+                }
+
+                if (fallbackPages.isNotEmpty()) {
+                    return fallbackPages
+                }
+            }
+
+            // Final fallback to old behavior
             return allPageUrls.map { url ->
                 MangaPage(generateUid(url), url, null, source)
             }
@@ -267,7 +359,25 @@ internal abstract class NineMangaParser(
             }
             .build()
 
-        val doc = webClient.httpGet(url, headers).parseHtml()
+        val response = webClient.httpGet(url, headers)
+        var doc = response.parseHtml()
+
+        // Check if we've been redirected to a source selection page
+        val responseUrl = response.request.url.host
+        if (!responseUrl.contains("ninemanga", ignoreCase = true)) {
+            // Look for source selection buttons
+            val sourceLink = doc.selectFirst("a.vision-button[href*=esninemanga], a.cool-blue[href*=esninemanga]")?.attr("href")
+            if (sourceLink != null) {
+                // Clean up the URL (remove &amp; and replace with &)
+                val cleanUrl = sourceLink.replace("&amp;", "&")
+
+                // Follow the source redirect
+                val sourceResponse = webClient.httpGet(cleanUrl, headers)
+                doc = sourceResponse.parseHtml()
+            } else {
+                throw ParseException("Redirected to wrong domain: $responseUrl", page.url)
+            }
+        }
         val root = doc.body()
         return root.selectFirst("img.manga_pic")?.attrAsAbsoluteUrl("src")
             ?: root.selectFirstOrThrow("a.pic_download").attrAsAbsoluteUrl("href")

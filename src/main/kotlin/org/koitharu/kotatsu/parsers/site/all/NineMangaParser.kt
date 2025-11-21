@@ -171,7 +171,6 @@ internal abstract class NineMangaParser(
 	override suspend fun getRelatedManga(seed: Manga): List<Manga> = emptyList()
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-		// Import cookies from domain and use HTTP request instead of captureDocument
 		val url = chapter.url.toAbsoluteUrl(domain)
 		val cookies = context.cookieJar.getCookies(domain)
 		val headers = getRequestHeaders().newBuilder()
@@ -185,68 +184,108 @@ internal abstract class NineMangaParser(
 
 		val doc = webClient.httpGet(url, headers).parseHtml()
 
-		// Check for page selector dropdown first
-		val pageSelect = doc.selectFirst("select.sl-page")
-			?: doc.selectFirst("select#page")
-			?: doc.selectFirst("select[name=page]")
+		// First check for change_pic_page selector (has all_imgs_url script - instant loading)
+		val pageSelect = doc.selectFirst("select.change_pic_page")
 
-		// Always use the efficient -10-pageNumber.html format
-		// Get total pages from the download link text (e.g., "1 / 57")
-		val totalPagesText = doc.selectFirst("a.pic_download")?.text()?.substringAfter("/")?.trim()?.toIntOrNull()
+		if (pageSelect != null) {
+			// Extract all image URLs from JavaScript all_imgs_url array
+			val scriptContent = doc.select("script").find { script ->
+				script.html().contains("all_imgs_url") && script.html().contains("[")
+			}?.html()
+
+			if (scriptContent != null) {
+				val imageUrls = extractImageUrlsFromScript(scriptContent)
+				if (imageUrls.isNotEmpty()) {
+					return imageUrls.mapIndexed { index, imageUrl ->
+						MangaPage(
+							id = generateUid("${chapter.id}-$index"),
+							url = imageUrl,
+							preview = null,
+							source = source
+						)
+					}
+				}
+			}
+		}
+
+		// Fallback: Use download link method (requires loading individual pages)
+		val downloadLinkPages = doc.selectFirst("a.pic_download")?.text()?.substringAfter("/")?.trim()?.toIntOrNull()
+			?: doc.selectFirst("select.sl-page")?.select("option")?.size
+			?: doc.selectFirst("select#page")?.select("option")?.size
+			?: doc.selectFirst("select[name=page]")?.select("option")?.size
 			?: throw ParseException("Page count not found", chapter.url)
 
-		// Generate multi-image page URLs (each contains ~10 images)
-		val baseUrl = chapter.url.toAbsoluteUrl(domain)
-		val allPageUrls = mutableListOf<String>()
-
-		// Each page contains 10 images, calculate how many pages we need
-		val imagesPerPage = 10
-		val totalPages = (totalPagesText + imagesPerPage - 1) / imagesPerPage // Ceiling division
-
-		for (pageNum in 1..totalPages) {
-			// Generate URL: chapter-id-10-pageNumber.html (each page has 10 images)
-			allPageUrls.add(baseUrl.replace(".html", "-10-$pageNum.html"))
-		}
-
-		val allPages = mutableListOf<MangaPage>()
-
-		// Process all page URLs to collect images in order
-		for (pageUrl in allPageUrls) {
-			val pageDoc = if (pageUrl == chapter.url.toAbsoluteUrl(domain)) {
-				doc // Use already loaded first page
+		// Use individual page method (slower but works when script method not available)
+		return (1..downloadLinkPages).map { pageNum ->
+			val pageUrl = if (pageNum == 1) {
+				url
 			} else {
-				try {
-					webClient.httpGet(pageUrl, headers).parseHtml()
-				} catch (e: Exception) {
-					continue // Skip failed pages
+				url.replace(".html", "-$pageNum.html")
+			}
+
+			MangaPage(
+				id = generateUid(pageUrl),
+				url = pageUrl,
+				preview = null,
+				source = source
+			)
+		}
+	}
+
+	private fun extractImageUrlsFromScript(scriptContent: String): List<String> {
+		try {
+			// Find the all_imgs_url array
+			val startIndex = scriptContent.indexOf("all_imgs_url: [")
+			if (startIndex == -1) return emptyList()
+
+			val arrayStart = startIndex + "all_imgs_url: ".length
+			var depth = 0
+			var inString = false
+			var escape = false
+			var arrayEnd = arrayStart
+
+			// Find the matching closing bracket
+			for (i in arrayStart until scriptContent.length) {
+				val char = scriptContent[i]
+
+				when {
+					escape -> escape = false
+					char == '\\' -> escape = true
+					char == '"' && !escape -> inString = !inString
+					!inString -> {
+						when (char) {
+							'[' -> depth++
+							']' -> {
+								depth--
+								if (depth == 0) {
+									arrayEnd = i + 1
+									break
+								}
+							}
+						}
+					}
 				}
 			}
 
-			// Get ALL images from this page
-			val images = pageDoc.select("img.manga_pic")
-			for (img in images) {
-				val imgUrl = img.attrAsAbsoluteUrl("src")
-				if (imgUrl.isNotEmpty() && !allPages.any { it.url == imgUrl }) {
-					allPages.add(MangaPage(generateUid(imgUrl), imgUrl, null, source))
-				}
-			}
-		}
+			if (depth != 0) return emptyList()
 
-		// If no images found, fallback to old behavior
-		if (allPages.isEmpty()) {
-			return allPageUrls.map { url ->
-				MangaPage(generateUid(url), url, null, source)
-			}
-		}
+			// Extract the array content
+			val arrayContent = scriptContent.substring(arrayStart, arrayEnd)
 
-		return allPages
+			// Extract URLs using regex
+			val urlRegex = Regex("""["']([^"']+\.(?:webp|jpg|jpeg|png)[^"']*)["']""")
+			return urlRegex.findAll(arrayContent).map { it.groupValues[1] }.toList()
+
+		} catch (e: Exception) {
+			return emptyList()
+		}
 	}
 
 	override suspend fun getPageUrl(page: MangaPage): String {
 		if (page.url.endsWith(".jpg", true) || page.url.endsWith(".png", true) || page.url.endsWith(".jpeg", true) || page.url.endsWith(".webp", true)) {
 			return page.url
 		}
-		// Import cookies from domain and use HTTP request instead of captureDocument
+
 		val url = page.url.toAbsoluteUrl(domain)
 		val cookies = context.cookieJar.getCookies(domain)
 		val headers = getRequestHeaders().newBuilder()
@@ -369,41 +408,27 @@ internal abstract class NineMangaParser(
 	}
 
 	private fun parseChapterDateByLang(date: String): Long {
-		val dateWords = date.split(" ")
+		if (date.isBlank()) return 0L
 
-		if (dateWords.size == 3) {
+		val dateWords = date.split(" ")
+		if (dateWords.size != 3) return 0L
+
+		return try {
 			if (dateWords[1].contains(",")) {
 				SimpleDateFormat("MMM d, yyyy", Locale.ENGLISH).parseSafe(date)
 			} else {
-				val timeAgo = Integer.parseInt(dateWords[0])
-				return Calendar.getInstance().apply {
-					when (dateWords[1]) {
-						"minutes" -> Calendar.MINUTE // EN-FR
-						"hours" -> Calendar.HOUR // EN
+				val timeAgo = dateWords[0].toIntOrNull() ?: return 0L
+				val timeUnit = when (dateWords[1]) {
+					"minutes", "minutos", "минут", "minuti" -> Calendar.MINUTE
+					"hours", "horas", "hora", "часа", "Stunden", "ore", "heures" -> Calendar.HOUR
+					else -> return 0L
+				}
 
-						"minutos" -> Calendar.MINUTE // ES
-						"horas" -> Calendar.HOUR
-
-						// "minutos" -> Calendar.MINUTE // BR
-						"hora" -> Calendar.HOUR
-
-						"минут" -> Calendar.MINUTE // RU
-						"часа" -> Calendar.HOUR
-
-						"Stunden" -> Calendar.HOUR // DE
-
-						"minuti" -> Calendar.MINUTE // IT
-						"ore" -> Calendar.HOUR
-
-						"heures" -> Calendar.HOUR // FR ("minutes" also French word)
-						else -> null
-					}?.let {
-						add(it, -timeAgo)
-					}
-				}.timeInMillis
+				System.currentTimeMillis() - (timeAgo * if (timeUnit == Calendar.MINUTE) 60_000L else 3_600_000L)
 			}
+		} catch (e: Exception) {
+			0L
 		}
-		return 0L
 	}
 
 	@MangaSourceParser("NINEMANGA_EN", "NineManga English", "en")

@@ -157,13 +157,13 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 		val slug = json.optString("obr_slug", "").ifEmpty {
 			name.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')
 		}
-		val coverPath = json.optString("obr_imagem", "")
+		val coverPath = json.optString("obr_imagem", "").takeIf { it != "null" && it.isNotEmpty() } ?: ""
 
 		val coverUrl = when {
+			coverPath.isEmpty() -> null
 			coverPath.startsWith("http") -> coverPath
 			coverPath.startsWith("wp-content") -> "$cdnUrl/$coverPath"
-			coverPath.isNotEmpty() -> "$cdnUrl/scans/$scanId/obras/$id/$coverPath"
-			else -> ""
+			else -> "$cdnUrl/scans/$scanId/obras/$id/$coverPath"
 		}
 
 		// Get genre information

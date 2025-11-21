@@ -179,7 +179,7 @@ internal class SussyScan(context: MangaLoaderContext) : PagedMangaParser(
 		val coverPath = json.optString("obr_imagem", "").takeIf { it != "null" && it.isNotEmpty() } ?: ""
 
 		val coverUrl = when {
-			coverPath.isEmpty() -> ""
+			coverPath.isEmpty() -> null
 			coverPath.startsWith("http") -> coverPath
 			coverPath.startsWith("wp-content") -> "$cdnUrl/$coverPath"
 			else -> "$cdnUrl/scans/$scanId/obras/$id/$coverPath"

@@ -154,16 +154,12 @@ internal class DilarTube(context: MangaLoaderContext) :
             // Add page
             jsonBody.put("page", page)
 
+            // Use minimal headers and JSONObject method
             val headers = Headers.Builder()
-                .add("Content-Type", "application/json")
-                .add("Accept", "application/json")
                 .add("Referer", "https://v2.dilar.tube/")
-                .add("Accept-Encoding", "identity")  // Disable response compression
-                .set("Content-Encoding", "identity")  // Explicitly disable content encoding
                 .build()
 
-        // Use string payload and try to override automatic gzip
-        val response = webClient.httpPost(url.toHttpUrl(), jsonBody.toString(), headers).parseJson()
+        val response = webClient.httpPost(url.toHttpUrl(), jsonBody, headers).parseJson()
 
         // Try different possible response structures
         val rows = when {

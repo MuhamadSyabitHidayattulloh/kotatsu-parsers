@@ -198,6 +198,8 @@ internal class Waveteamy(context: MangaLoaderContext) :
     override suspend fun getDetails(manga: Manga): Manga {
         val id = manga.url.substringAfterLast("/")
         val url = "https://$domain/series/$id"
+
+        // Add early debug info to see if method is called
         val doc = webClient.httpGet(url).parseHtml()
 
         // Try to get description from meta tag as fallback
@@ -205,6 +207,9 @@ internal class Waveteamy(context: MangaLoaderContext) :
 
         // Parse Next.js hydration data - try multiple patterns
         val allScripts = doc.select("script")
+
+        // ALWAYS add debug info to description to see what's happening
+        val debugInfo = "DEBUG: Found ${allScripts.size} scripts. Script with mangaData: ${allScripts.any { it.html().contains("mangaData") }}. Script with next: ${allScripts.any { it.html().contains("__next") }}"
 
         // First try: exact pattern we expect
         var scriptContent = allScripts.find {
@@ -313,7 +318,9 @@ internal class Waveteamy(context: MangaLoaderContext) :
             // Try simpler extraction - just look for chaptersData array
             val (fallbackChapters, fallbackError) = try {
                 val chapters = extractChaptersDataDirectly(scriptContent, url)
-                Pair(chapters, if (chapters.isEmpty()) "Fallback extraction found no chapters" else "Fallback extraction found ${chapters.size} chapters")
+                val postIdExists = scriptContent?.contains("\"postId\":") == true
+                val chaptersDataExists = scriptContent?.contains("\"chaptersData\":[") == true
+                Pair(chapters, "Fallback: postId=$postIdExists, chaptersData=$chaptersDataExists, found ${chapters.size} chapters")
             } catch (e2: Exception) {
                 Pair(emptyList(), "Fallback extraction failed: ${e2.message}")
             }
@@ -398,13 +405,41 @@ internal class Waveteamy(context: MangaLoaderContext) :
         val postIdMatch = Regex(""""postId":(\d+)""").find(scriptContent)
         val postId = postIdMatch?.groupValues?.get(1)?.toLongOrNull() ?: return emptyList()
 
-        // Look for chaptersData array directly in the script
-        val chaptersPattern = Regex(""""chaptersData":\s*(\[.*?\](?=,")|\[.*?\]$)""", RegexOption.DOT_MATCHES_ALL)
-        val match = chaptersPattern.find(scriptContent) ?: return emptyList()
+        // Use a simpler approach - find chaptersData and extract a reasonable chunk
+        val chaptersStart = scriptContent.indexOf("\"chaptersData\":[")
+        if (chaptersStart == -1) return emptyList()
 
-        val chaptersJsonStr = match.groupValues[1]
+        val arrayStart = chaptersStart + "\"chaptersData\":".length
+
+        // Find the end of the array by counting brackets
+        var bracketCount = 0
+        var arrayEnd = arrayStart
+        var inString = false
+        var escape = false
+
+        for (i in arrayStart until scriptContent.length) {
+            val c = scriptContent[i]
+            when {
+                escape -> escape = false
+                c == '\\' -> escape = true
+                c == '"' && !escape -> inString = !inString
+                !inString && c == '[' -> bracketCount++
+                !inString && c == ']' -> {
+                    bracketCount--
+                    if (bracketCount == 0) {
+                        arrayEnd = i + 1
+                        break
+                    }
+                }
+            }
+        }
+
+        if (bracketCount != 0) return emptyList()
+
+        val chaptersJsonStr = scriptContent.substring(arrayStart, arrayEnd)
             .replace("\\\"", "\"")
             .replace("\\\\", "\\")
+            .replace("\\n", "\n")
 
         try {
             val chaptersArray = org.json.JSONArray(chaptersJsonStr)

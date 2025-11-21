@@ -185,6 +185,7 @@ internal abstract class NineMangaParser(
 
         val response = webClient.httpGet(url, headers)
         var doc = response.parseHtml()
+        var followedRedirect = false
 
         // Check if we've been redirected to a source selection page
         val responseUrl = response.request.url.host
@@ -199,8 +200,34 @@ internal abstract class NineMangaParser(
                 // Follow the source redirect
                 val sourceResponse = webClient.httpGet(cleanUrl, headers)
                 doc = sourceResponse.parseHtml()
+                followedRedirect = true
             } else {
                 throw ParseException("Redirected to wrong domain: $responseUrl", chapter.url)
+            }
+        }
+
+        // If we followed a redirect, try to extract images from JavaScript
+        if (followedRedirect) {
+            val scriptContent = doc.select("script[type*=javascript]").firstOrNull { script ->
+                script.html().contains("all_imgs_url")
+            }?.html()
+
+            if (scriptContent != null) {
+                val imageUrlsRegex = """all_imgs_url:\s*\[(.*?)\]""".toRegex(RegexOption.DOT_MATCHES_ALL)
+                val match = imageUrlsRegex.find(scriptContent)
+                if (match != null) {
+                    val imageUrlsContent = match.groupValues[1]
+                    val imageUrls = """"([^"]+)"""".toRegex().findAll(imageUrlsContent)
+                        .map { it.groupValues[1] }
+                        .toList()
+
+                    if (imageUrls.isNotEmpty()) {
+                        println("DEBUG: Extracted ${imageUrls.size} images from JavaScript array")
+                        return imageUrls.mapIndexed { index, imageUrl ->
+                            MangaPage(generateUid("$imageUrl-$index"), imageUrl, null, source)
+                        }
+                    }
+                }
             }
         }
 

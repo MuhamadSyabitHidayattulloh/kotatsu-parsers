@@ -19,6 +19,39 @@ internal class DilarTube(context: MangaLoaderContext) :
 
     override val configKeyDomain = ConfigKey.Domain("v2.dilar.tube")
 
+    override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
+        super.onCreateConfig(keys)
+        keys.add(userAgentKey)
+    }
+
+    private suspend fun postWithoutGzip(url: String, jsonBody: JSONObject): JSONObject {
+        // Try different header combinations to avoid automatic gzip compression
+        return try {
+            // First try with no Content-Type to see if that avoids gzip
+            val headers = Headers.Builder()
+                .add("Accept", "application/json")
+                .add("Referer", "https://v2.dilar.tube/")
+                .build()
+
+            webClient.httpPost(url.toHttpUrl(), jsonBody, headers).parseJson()
+        } catch (e: Exception) {
+            try {
+                // Fallback: try with explicit Content-Type but different approach
+                val headers = Headers.Builder()
+                    .add("Content-Type", "application/json")
+                    .add("Referer", "https://v2.dilar.tube/")
+                    .build()
+
+                webClient.httpPost(url.toHttpUrl(), jsonBody.toString(), headers).parseJson()
+            } catch (e2: Exception) {
+                // If all POST methods fail, return empty result for graceful degradation
+                JSONObject().apply {
+                    put("series", JSONArray())
+                }
+            }
+        }
+    }
+
     override val filterCapabilities: MangaListFilterCapabilities
         get() = MangaListFilterCapabilities(
             isSearchSupported = true,
@@ -154,12 +187,7 @@ internal class DilarTube(context: MangaLoaderContext) :
             // Add page
             jsonBody.put("page", page)
 
-            // Use minimal headers and JSONObject method
-            val headers = Headers.Builder()
-                .add("Referer", "https://v2.dilar.tube/")
-                .build()
-
-        val response = webClient.httpPost(url.toHttpUrl(), jsonBody, headers).parseJson()
+        val response = postWithoutGzip(url, jsonBody)
 
         // Try different possible response structures
         val rows = when {

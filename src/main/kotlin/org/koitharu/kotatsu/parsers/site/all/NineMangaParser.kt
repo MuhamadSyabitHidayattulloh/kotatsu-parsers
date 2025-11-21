@@ -157,13 +157,7 @@ internal abstract class NineMangaParser(
 						// Try both selectors without throwing
 						val a = li.selectFirst("div.chapter-name.long > a") ?: li.selectFirst("div.chapter-name.short > a")
 						if (a != null) {
-							val href = a.attr("href").let { url ->
-								if (url.startsWith("http")) {
-									// Extract relative URL from absolute URL
-									val path = url.substringAfter("://").substringAfter("/", "")
-									if (path.isNotEmpty()) "/$path" else url
-								} else url
-							}
+							val href = a.attr("href")
 
 							chapters.add(MangaChapter(
 								id = generateUid(href),
@@ -190,16 +184,21 @@ internal abstract class NineMangaParser(
 	override suspend fun getRelatedManga(seed: Manga): List<Manga> = emptyList()
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-		// Ensure we always use the proper chapter URL format: /chapter/MangaName/ChapterID.html
-		val chapterUrl = if (chapter.url.startsWith("/chapter/")) {
-			"https://$domain${chapter.url}"
-		} else {
-			chapter.url.toAbsoluteUrl(domain)
-		}
-
-		// Validate URL to avoid redirects to external sites
-		if (!chapterUrl.contains(domain)) {
-			throw ParseException("Invalid chapter URL", chapter.url)
+		// Handle both absolute and relative URLs from chapter parsing
+		val chapterUrl = when {
+			chapter.url.startsWith("https://") -> {
+				// Already absolute URL, validate it's from correct domain
+				if (!chapter.url.contains(domain)) {
+					throw ParseException("Invalid chapter URL - external domain", chapter.url)
+				}
+				chapter.url
+			}
+			chapter.url.startsWith("/chapter/") -> {
+				"https://$domain${chapter.url}"
+			}
+			else -> {
+				chapter.url.toAbsoluteUrl(domain)
+			}
 		}
 
 		val cookies = context.cookieJar.getCookies(domain)

@@ -128,19 +128,27 @@ internal class SussyScan(context: MangaLoaderContext) : PagedMangaParser(
 		}
 
 		val response = webClient.httpGet(url, apiHeaders).parseJson()
-		val results = response.optJSONArray("resultados") ?: return emptyList()
+		val results = response.optJSONArray("obras") ?: response.optJSONArray("resultados") ?: return emptyList()
 		return results.mapJSON { parseMangaFromJson(it) }
 	}
 
 	private fun buildSearchUrl(page: Int, filter: MangaListFilter): HttpUrl {
-		val builder = "$apiUrl/obras".toHttpUrl().newBuilder()
+		val builder = "$apiUrl/obras/search".toHttpUrl().newBuilder()
 			.addQueryParameter("obr_nome", filter.query ?: "")
 			.addQueryParameter("limite", "15")
 			.addQueryParameter("pagina", page.toString())
 
 		val isHentai = filter.types.firstOrNull() == ContentType.HENTAI
 
-		if (isHentai) builder.addQueryParameter("gen_id", "5") else builder.addQueryParameter("todos_generos", "true")
+		if (isHentai) {
+			builder.addQueryParameter("gen_id", "5")
+		} else {
+			builder.addQueryParameter("todos_generos", "1")
+		}
+
+		// Add default ordering for search
+		builder.addQueryParameter("orderBy", "ultima_atualizacao")
+		builder.addQueryParameter("orderDirection", "DESC")
 
 		// Add tags
 		filter.tags.forEach { tag ->

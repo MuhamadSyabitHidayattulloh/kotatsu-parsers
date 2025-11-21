@@ -115,12 +115,14 @@ internal class SussyScan(context: MangaLoaderContext) : PagedMangaParser(
 					.addQueryParameter("gen_id", genId)
 					.build()
 			}
-			// Default to updated
+			// Default to updated using search endpoint
 			else -> {
-				"$apiUrl/obras/novos-capitulos".toHttpUrl().newBuilder()
-					.addQueryParameter("limite", pageSize.toString())
+				"$apiUrl/obras/search".toHttpUrl().newBuilder()
 					.addQueryParameter("pagina", page.toString())
-					.addQueryParameter("gen_id", genId)
+					.addQueryParameter("limite", pageSize.toString())
+					.addQueryParameter("todos_generos", "1")
+					.addQueryParameter("orderBy", "ultima_atualizacao")
+					.addQueryParameter("orderDirection", "DESC")
 					.build()
 			}
 		}

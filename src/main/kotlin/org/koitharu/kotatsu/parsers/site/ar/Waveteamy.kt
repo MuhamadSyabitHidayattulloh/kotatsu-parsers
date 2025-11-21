@@ -185,24 +185,13 @@ internal class Waveteamy(context: MangaLoaderContext) :
 
     private fun resolveCover(path: String): String {
         if (path.startsWith("http")) return path
-        return "https://$domain/$path" // Based on user request example: series/751/cover/... -> https://waveteamy.com/series/...
-        // Wait, user said: "https://wcloud.site/series/..." in one example, but "https://waveteamy.com/images/place_holder" in JS.
-        // The JS function l(e) says: if starts with projects/series/users -> s.k.r2domain + t
-        // We don't know s.k.r2domain easily without parsing more JS.
-        // However, the user provided example: "https://wcloud.site/series/572/cover/01102641604.webp"
-        // Let's try to use wcloud.site if it looks like a relative path, or fall back to domain.
-        // Actually, let's just use the domain for now, or better, check if we can find the r2domain.
-        // For now, I'll use a safe bet or what the user showed.
-        // User showed: "imageUrl":"series/751/cover/14191006424.jpg"
-        // And later: <img src="https://wcloud.site/series/572/cover/01102641604.webp"
-        // So it seems `wcloud.site` is the CDN.
-        // But let's stick to what we can construct safely. If I use absolute URL it works.
-        // If I use relative, the app might handle it if I prepend the domain.
-        // Let's try prepending `https://wcloud.site/` for now if it matches the pattern, otherwise `https://waveteamy.com/`.
-        
+
+        // Use wcloud.site for series/projects/users paths as they are served from CDN
         if (path.startsWith("series/") || path.startsWith("projects/") || path.startsWith("users/")) {
             return "https://wcloud.site/$path"
         }
+
+        // For other paths, use the main domain
         return "https://$domain/$path"
     }
 
@@ -211,82 +200,109 @@ internal class Waveteamy(context: MangaLoaderContext) :
         val url = "https://$domain/series/$id"
         val doc = webClient.httpGet(url).parseHtml()
 
+        // Try to get description from meta tag as fallback
+        val metaDescription = doc.selectFirst("meta[name=description]")?.attr("content")
+
         // Parse Next.js hydration data
-        val scriptContent = doc.select("script").find { it.html().contains("self.__next_f.push") && it.html().contains("mangaData") }?.html()
-            ?: throw ParseException("Failed to find manga data", url)
+        val scriptContent = doc.select("script").find {
+            it.html().contains("self.__next_f.push") && it.html().contains("mangaData")
+        }?.html()
 
-        // Extract the JSON string. It's usually inside a push call.
-        // The user example: self.__next_f.push([1,"5:[[\"$\",\"script\",null,{\"type\":\"application/ld+json\",\"dangerouslySetInnerHTML\":{\"__html\":\"$15\"}}],[\"$\",\"$L16\",null,{\"mangaData\":{...
-        // This is complex to regex perfectly.
-        // However, we can search for `\"mangaData\":` and extract the object.
-        
-        val jsonStr = extractJson(scriptContent, url)
-        val json = JSONObject(jsonStr)
-        val mangaData = json.getJSONObject("mangaData")
-        
-        val title = mangaData.getString("name")
-        val cover = mangaData.getString("cover")
-        val description = mangaData.optString("story")
-        val statusVal = mangaData.optInt("status")
-        val state = when (statusVal) {
-            0 -> MangaState.ONGOING
-            1 -> MangaState.FINISHED
-            else -> MangaState.ONGOING
-        }
-        
-        val authors = mutableSetOf<String>()
-        mangaData.optString("author").takeIf { it != "null" }?.let { authors.add(it) }
-        mangaData.optString("artist").takeIf { it != "null" }?.let { authors.add(it) }
-        
-        val genres = mangaData.optJSONArray("genre")?.let { arr ->
-            (0 until arr.length()).mapNotNull { i ->
-                val g = arr.getString(i)
-                MangaTag(key = g, title = g, source = source)
-            }.toSet()
-        } ?: emptySet()
-
-        val chaptersData = json.getJSONArray("chaptersData")
-        val chapters = (0 until chaptersData.length()).map { i ->
-            val ch = chaptersData.getJSONObject(i)
-            val chId = ch.getInt("id")
-            val chNum = ch.optDouble("chapter", 0.0).toFloat()
-            val chDate = ch.getString("postTime")
-            val chTitle = ch.optString("title")
-            
-            MangaChapter(
-                id = generateUid(chId.toLong()),
-                title = if (chTitle.isNotEmpty()) chTitle else null,
-                number = chNum,
-                volume = 0,
-                url = "/series/$id/$chNum", // URL is usually /series/ID/CHAPTER_NUM based on user link: https://waveteamy.com/series/1048778676/374
-                uploadDate = parseDate(chDate),
-                source = source,
-                scanlator = null,
-                branch = null
+        if (scriptContent == null) {
+            // If we can't find the script, return basic manga info with meta description
+            return manga.copy(
+                description = metaDescription,
+                chapters = emptyList()
             )
         }
 
-        return manga.copy(
-            title = title,
-            description = description,
-            coverUrl = resolveCover(cover),
-            state = state,
-            authors = authors,
-            tags = genres,
-            chapters = chapters,
-        )
+        try {
+            val jsonStr = extractJson(scriptContent, url)
+            val json = JSONObject(jsonStr)
+            val mangaData = json.getJSONObject("mangaData")
+
+            val title = mangaData.getString("name")
+            val cover = mangaData.getString("cover")
+            val description = mangaData.optString("story").takeIf { it.isNotEmpty() } ?: metaDescription
+            val statusVal = mangaData.optInt("status")
+            val state = when (statusVal) {
+                0 -> MangaState.ONGOING
+                1 -> MangaState.FINISHED
+                else -> MangaState.ONGOING
+            }
+
+            val authors = mutableSetOf<String>()
+            mangaData.optString("author").takeIf { it.isNotEmpty() && it != "null" }?.let { authors.add(it) }
+            mangaData.optString("artist").takeIf { it.isNotEmpty() && it != "null" }?.let { authors.add(it) }
+
+            val genres = mangaData.optJSONArray("genre")?.let { arr ->
+                (0 until arr.length()).mapNotNull { i ->
+                    val g = arr.getString(i)
+                    if (g.isNotEmpty()) MangaTag(key = g, title = g, source = source) else null
+                }.toSet()
+            } ?: emptySet()
+
+            val chaptersData = json.getJSONArray("chaptersData")
+            val chapters = (0 until chaptersData.length()).map { i ->
+                val ch = chaptersData.getJSONObject(i)
+                val chId = ch.getInt("id")
+                val chNum = ch.optDouble("chapter", 0.0).toFloat()
+                val chDate = ch.getString("postTime")
+                val chTitle = ch.optString("title").takeIf { it.isNotEmpty() && it != "null" }
+
+                MangaChapter(
+                    id = generateUid(chId.toLong()),
+                    title = chTitle,
+                    number = chNum,
+                    volume = 0,
+                    url = "/series/$id/$chNum",
+                    uploadDate = parseDate(chDate),
+                    source = source,
+                    scanlator = null,
+                    branch = null
+                )
+            }
+
+            return manga.copy(
+                title = title,
+                description = description,
+                coverUrl = resolveCover(cover),
+                state = state,
+                authors = authors,
+                tags = genres,
+                chapters = chapters,
+            )
+        } catch (e: Exception) {
+            // If JSON extraction fails, return basic info with meta description
+            return manga.copy(
+                description = metaDescription,
+                chapters = emptyList()
+            )
+        }
     }
 
     private fun extractJson(script: String, url: String): String {
-        // Quick and dirty extraction of the object containing mangaData
-        // We look for `{"mangaData":` and try to find the matching closing brace.
-        val startIndex = script.indexOf("{\"mangaData\":")
-        if (startIndex == -1) throw ParseException("mangaData not found", url)
-        
+        // Handle Next.js format: self.__next_f.push([1,"5:..."])
+        // The data contains escaped JSON that needs to be unescaped
+
+        // First try to find mangaData in the script
+        val mangaDataIndex = script.indexOf("\"mangaData\":")
+        if (mangaDataIndex == -1) throw ParseException("mangaData not found", url)
+
+        // Look backwards to find the opening brace of the containing object
+        var startIndex = mangaDataIndex
+        for (i in mangaDataIndex downTo 0) {
+            if (script[i] == '{') {
+                startIndex = i
+                break
+            }
+        }
+
+        // Now find the matching closing brace
         var braceCount = 0
         var inString = false
         var escape = false
-        
+
         for (i in startIndex until script.length) {
             val c = script[i]
             if (escape) {
@@ -306,7 +322,13 @@ internal class Waveteamy(context: MangaLoaderContext) :
                 if (c == '}') {
                     braceCount--
                     if (braceCount == 0) {
-                        return script.substring(startIndex, i + 1).replace("\\\"", "\"").replace("\\\\", "\\")
+                        val rawJson = script.substring(startIndex, i + 1)
+                        // Unescape the JSON string (Next.js escapes quotes and backslashes)
+                        return rawJson.replace("\\\"", "\"")
+                                     .replace("\\\\", "\\")
+                                     .replace("\\n", "\n")
+                                     .replace("\\r", "\r")
+                                     .replace("\\t", "\t")
                     }
                 }
             }
@@ -315,10 +337,29 @@ internal class Waveteamy(context: MangaLoaderContext) :
     }
 
     private fun parseDate(dateStr: String): Long {
-        return try {
-            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).parse(dateStr)?.time ?: 0L
+        if (dateStr.isBlank()) return 0L
+
+        val formats = listOf(
+            "yyyy-MM-dd'T'HH:mm:ss+00:00", // 2025-11-20T09:16:26+00:00
+            "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", // Standard ISO format
+            "yyyy-MM-dd'T'HH:mm:ss", // Without timezone
+            "yyyy-MM-dd HH:mm:ss", // 2025-11-13 16:05:54
+        )
+
+        for (pattern in formats) {
+            try {
+                return SimpleDateFormat(pattern, Locale.US).parse(dateStr)?.time ?: 0L
+            } catch (e: Exception) {
+                // Try next format
+            }
+        }
+
+        // If all formats fail, try to parse just the date part
+        try {
+            val datePart = dateStr.substring(0, 10) // Extract yyyy-MM-dd
+            return SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(datePart)?.time ?: 0L
         } catch (e: Exception) {
-            0L
+            return 0L
         }
     }
 

@@ -157,7 +157,22 @@ internal abstract class NineMangaParser(
 						// Try both selectors without throwing
 						val a = li.selectFirst("div.chapter-name.long > a") ?: li.selectFirst("div.chapter-name.short > a")
 						if (a != null) {
-							val href = a.attr("href")
+							val rawHref = a.attr("href")
+							println("DEBUG: Raw chapter URL extracted: $rawHref")
+							println("DEBUG: Chapter title: ${a.text()}")
+
+							// Reconstruct proper URL if we got a redirect URL (doesn't contain proper domain)
+							val href = if (rawHref.startsWith("http") && !rawHref.contains(domain)) {
+								val chapterId = rawHref.substringAfterLast("/")
+								val chapterTitle = a.text().trim()
+								val cleanTitle = chapterTitle.replace(Regex("""[^\w\s.-]"""), "").replace(" ", "%20")
+								val reconstructedUrl = "/chapter/$cleanTitle/$chapterId.html"
+								println("DEBUG: Reconstructed chapter URL from redirect: $reconstructedUrl")
+								reconstructedUrl
+							} else {
+								rawHref
+							}
+							println("DEBUG: Final chapter URL stored: $href")
 
 							chapters.add(MangaChapter(
 								id = generateUid(href),
@@ -184,14 +199,22 @@ internal abstract class NineMangaParser(
 	override suspend fun getRelatedManga(seed: Manga): List<Manga> = emptyList()
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
+		println("DEBUG: getPages called with chapter.url: ${chapter.url}")
+
 		// Handle both absolute and relative URLs from chapter parsing
 		val chapterUrl = when {
 			chapter.url.startsWith("https://") -> {
-				// Already absolute URL, validate it's from correct domain
+				// Check if it's a redirect URL that needs reconstruction (doesn't contain proper domain)
 				if (!chapter.url.contains(domain)) {
-					throw ParseException("Invalid chapter URL - external domain", chapter.url)
+					// Reconstruct proper NineManga URL from redirect
+					val chapterId = chapter.url.substringAfterLast("/")
+					val cleanTitle = chapter.title?.replace(Regex("""[^\w\s.-]"""), "")?.replace(" ", "%20") ?: "Unknown"
+					val reconstructedUrl = "https://$domain/chapter/$cleanTitle/$chapterId.html"
+					println("DEBUG: Reconstructed redirect URL from ${chapter.url} to $reconstructedUrl")
+					reconstructedUrl
+				} else {
+					chapter.url
 				}
-				chapter.url
 			}
 			chapter.url.startsWith("/chapter/") -> {
 				"https://$domain${chapter.url}"
@@ -200,6 +223,8 @@ internal abstract class NineMangaParser(
 				chapter.url.toAbsoluteUrl(domain)
 			}
 		}
+
+		println("DEBUG: Final chapter URL to request: $chapterUrl")
 
 		val cookies = context.cookieJar.getCookies(domain)
 		val headers = getRequestHeaders().newBuilder()

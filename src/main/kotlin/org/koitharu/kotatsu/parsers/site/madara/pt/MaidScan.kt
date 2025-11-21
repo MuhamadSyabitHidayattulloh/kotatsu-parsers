@@ -198,6 +198,8 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 		val mangaSlug = manga.url.substringAfter("/obras/")
 		val mangaJson = webClient.httpGet("$apiUrl/obras/$mangaSlug", apiHeaders).parseJson()
 
+		val obraId = mangaJson.getInt("obr_id")
+
 		val description = mangaJson.optString("obr_descricao")
 			.replace(Regex("</?strong>"), "")
 			.replace("\\/", "/")
@@ -222,7 +224,7 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 		}?.toSet() ?: emptySet()
 
 		val chapters = mangaJson.optJSONArray("capitulos")?.mapJSON { chapterJson ->
-			parseChapter(chapterJson)
+			parseChapter(chapterJson, obraId)
 		} ?: emptyList()
 
 		return manga.copy(
@@ -234,7 +236,7 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 		)
 	}
 
-	private fun parseChapter(json: JSONObject): MangaChapter {
+	private fun parseChapter(json: JSONObject, obraId: Int): MangaChapter {
 		val chapterId = json.getInt("cap_id")
 		val chapterName = json.getString("cap_nome")
 		val chapterNumber = json.optDouble("cap_numero").toFloat()
@@ -243,7 +245,7 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 			id = generateUid(chapterId.toLong()),
 			title = chapterName,
 			number = chapterNumber,
-			url = "/capitulo/$chapterId",
+			url = "/capitulo/$chapterId/$obraId",
 			uploadDate = 0, // No date field in this API response
 			source = source,
 			volume = 0,
@@ -261,38 +263,34 @@ internal class MaidScan(context: MangaLoaderContext) : PagedMangaParser(
 	}
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-		val chapterId = chapter.url.substringAfter("/capitulo/")
+		val urlParts = chapter.url.substringAfter("/capitulo/").split("/")
+		val chapterId = urlParts[0]
+		val obraId = urlParts.getOrNull(1)?.toIntOrNull() ?: 0
 
 		// Fetch chapter data from API
 		val chapterData = webClient.httpGet("$apiUrl/capitulos/$chapterId", apiHeaders).parseJson()
+
+		val capNumero = chapterData.optInt("cap_numero")
 
 		// Parse pages from the response
 		val pagesArray = chapterData.optJSONArray("cap_paginas")
 			?: throw Exception("No pages found in chapter")
 
 		return pagesArray.mapJSONNotNull { pageJson ->
-			val pagePath = pageJson.optString("path")
 			val pageSrc = pageJson.optString("src")
 
-			if (pagePath.isEmpty() && pageSrc.isEmpty()) return@mapJSONNotNull null
+			if (pageSrc.isEmpty()) return@mapJSONNotNull null
 
 			val imageUrl = when {
 				// Already a full URL
 				pageSrc.startsWith("http") -> pageSrc
-				// Path contains full file path (has file extension)
-				pagePath.isNotEmpty() && (pagePath.contains(".jpg") || pagePath.contains(".png") || pagePath.contains(".webp") || pagePath.contains(".jpeg")) -> {
-					"$cdnUrl/$pagePath"
-				}
-				// Path is directory path, combine with src
-				pagePath.isNotEmpty() && pageSrc.isNotEmpty() -> {
-					val cleanPath = pagePath.removePrefix("/")
-					"$cdnUrl/$cleanPath/$pageSrc"
-				}
 				// WordPress manga path, looks like: "manga_.../hash/001.webp"
 				pageSrc.startsWith("manga_") -> "$cdnUrl/wp-content/uploads/WP-manga/data/$pageSrc"
 				// WordPress legacy path: "wp-content/uploads/..."
 				pageSrc.startsWith("wp-content") -> "$cdnUrl/$pageSrc"
-				// Fallback to src
+				// MaidScan specific path: https://cdn.sussytoons.wtf/scans/3/obras/{obra_id}/capitulos/{cap_numero}/{src}
+				obraId > 0 && capNumero > 0 -> "https://cdn.sussytoons.wtf/scans/$scanId/obras/$obraId/capitulos/$capNumero/$pageSrc"
+				// Fallback to old CDN
 				else -> "$cdnUrl/$pageSrc"
 			}
 

@@ -221,7 +221,16 @@ internal class SussyScan(context: MangaLoaderContext) : PagedMangaParser(
 	override suspend fun getDetails(manga: Manga): Manga {
 		val mangaId = manga.url.substringAfter("/obra/").substringBefore("/")
 		val response = webClient.httpGet("$apiUrl/obras/$mangaId", apiHeaders).parseJson()
-		val mangaJson = response.optJSONObject("resultado") ?: throw Exception("Manga not found")
+
+		// Try to get manga data from "resultado" key first, then fallback to root response
+		val mangaJson = response.optJSONObject("resultado") ?: run {
+			// Check if the response itself contains manga data (has obr_id)
+			if (response.has("obr_id")) {
+				response
+			} else {
+				throw Exception("Manga not found")
+			}
+		}
 
 		val description = mangaJson.optString("obr_descricao")
 			.replace(Regex("</?strong>"), "")

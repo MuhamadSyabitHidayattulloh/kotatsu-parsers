@@ -186,7 +186,18 @@ internal abstract class NineMangaParser(
 	override suspend fun getRelatedManga(seed: Manga): List<Manga> = emptyList()
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-		val url = chapter.url.toAbsoluteUrl(domain)
+		// Ensure we always use the proper chapter URL format: /chapter/MangaName/ChapterID.html
+		val chapterUrl = if (chapter.url.startsWith("/chapter/")) {
+			"https://$domain${chapter.url}"
+		} else {
+			chapter.url.toAbsoluteUrl(domain)
+		}
+
+		// Validate URL to avoid redirects to external sites
+		if (!chapterUrl.contains(domain)) {
+			throw ParseException("Invalid chapter URL", chapter.url)
+		}
+
 		val cookies = context.cookieJar.getCookies(domain)
 		val headers = getRequestHeaders().newBuilder()
 			.add("Referer", "https://$domain/")
@@ -197,7 +208,7 @@ internal abstract class NineMangaParser(
 			}
 			.build()
 
-		val doc = webClient.httpGet(url, headers).parseHtml()
+		val doc = webClient.httpGet(chapterUrl, headers).parseHtml()
 
 		// Check for page selector dropdown first
 		val pageSelect = doc.selectFirst("select.change_pic_page")

@@ -2,6 +2,8 @@ package org.koitharu.kotatsu.parsers.site.ar
 
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Interceptor
+import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
@@ -24,14 +26,18 @@ internal class DilarTube(context: MangaLoaderContext) :
         keys.add(userAgentKey)
     }
 
-    private suspend fun postWithoutGzip(url: String, jsonBody: JSONObject): JSONObject {
-        // The first attempt works! Just use that
-        val headers = Headers.Builder()
-            .add("Accept", "application/json")
-            .add("Referer", "https://v2.dilar.tube/")
-            .build()
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val originalRequest = chain.request()
 
-        return webClient.httpPost(url.toHttpUrl(), jsonBody, headers).parseJson()
+        // Only modify POST requests to the search/filter endpoint
+        if (originalRequest.method == "POST" && originalRequest.url.toString().contains("/api/search/filter")) {
+            val newRequest = originalRequest.newBuilder()
+                .removeHeader("Content-Encoding")
+                .build()
+            return chain.proceed(newRequest)
+        }
+
+        return chain.proceed(originalRequest)
     }
 
     override val filterCapabilities: MangaListFilterCapabilities
@@ -169,7 +175,7 @@ internal class DilarTube(context: MangaLoaderContext) :
             // Add page
             jsonBody.put("page", page)
 
-        val response = postWithoutGzip(url, jsonBody)
+        val response = webClient.httpPost(url.toHttpUrl(), jsonBody).parseJson()
 
         // Parse the response - search/filter endpoint returns "rows", regular endpoint returns "series"
         val rows = when {
@@ -190,12 +196,13 @@ internal class DilarTube(context: MangaLoaderContext) :
         val cover = json.optString("cover", "")
         val summary = json.optString("summary", "")
 
-        // Build cover URL - use https://v2.dilar.tube domain and proper storage path
+        // Build cover URL - rollback to original working structure
         val coverUrl = if (cover.isNotEmpty()) {
             if (cover.startsWith("http")) {
                 cover
             } else {
-                "https://v2.dilar.tube/storage/uploads/series/$id/$cover"
+                val coverName = cover.substringBeforeLast('.') + ".webp"
+                "https://dilar.tube/uploads/manga/cover/$id/large_$coverName"
             }
         } else ""
 

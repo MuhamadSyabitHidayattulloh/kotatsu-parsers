@@ -330,7 +330,10 @@ internal abstract class NineMangaParser(
 	}
 
 	override suspend fun getPageUrl(page: MangaPage): String {
-		if (page.url.endsWith(".jpg", true) || page.url.endsWith(".png", true) || page.url.endsWith(".jpeg", true) || page.url.endsWith(".webp", true)) {
+		// Check if it's already a direct image URL (including ones with query parameters)
+		val urlWithoutQuery = page.url.substringBefore('?')
+		if (urlWithoutQuery.endsWith(".jpg", true) || urlWithoutQuery.endsWith(".png", true) ||
+			urlWithoutQuery.endsWith(".jpeg", true) || urlWithoutQuery.endsWith(".webp", true)) {
 			return page.url
 		}
 

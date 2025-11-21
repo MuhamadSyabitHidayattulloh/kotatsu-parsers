@@ -318,9 +318,10 @@ internal class Waveteamy(context: MangaLoaderContext) :
             // Try simpler extraction - just look for chaptersData array
             val (fallbackChapters, fallbackError) = try {
                 val chapters = extractChaptersDataDirectly(scriptContent, url)
-                val postIdExists = scriptContent?.contains("\"postId\":") == true
-                val chaptersDataExists = scriptContent?.contains("\"chaptersData\":[") == true
-                Pair(chapters, "Fallback: postId=$postIdExists, chaptersData=$chaptersDataExists, found ${chapters.size} chapters")
+                val hasL16Pattern = scriptContent?.contains("${'$'}L16") == true
+                val hasEscapedPostId = scriptContent?.contains("\\\"postId\\\":") == true
+                val hasEscapedChaptersData = scriptContent?.contains("\\\"chaptersData\\\":") == true
+                Pair(chapters, "Fallback: L16=$hasL16Pattern, escapedPostId=$hasEscapedPostId, escapedChapters=$hasEscapedChaptersData, found ${chapters.size} chapters")
             } catch (e2: Exception) {
                 Pair(emptyList(), "Fallback extraction failed: ${e2.message}")
             }
@@ -401,51 +402,24 @@ internal class Waveteamy(context: MangaLoaderContext) :
     private fun extractChaptersDataDirectly(scriptContent: String?, url: String): List<MangaChapter> {
         if (scriptContent == null) return emptyList()
 
-        // Extract postId first (needed for chapter URLs)
-        val postIdMatch = Regex(""""postId":(\d+)""").find(scriptContent)
-        val postId = postIdMatch?.groupValues?.get(1)?.toLongOrNull() ?: return emptyList()
+        // Look for the specific Next.js pattern containing manga data
+        // Pattern: "$L16",null,{"mangaData":{...},"chaptersData":[...]}
+        val l16Pattern = Regex("""\${'$'}L16.*?null,(\{.*?\})(?=\]\]|${'$'})""", RegexOption.DOT_MATCHES_ALL)
+        val match = l16Pattern.find(scriptContent) ?: return emptyList()
 
-        // Use a simpler approach - find chaptersData and extract a reasonable chunk
-        val chaptersStart = scriptContent.indexOf("\"chaptersData\":[")
-        if (chaptersStart == -1) return emptyList()
-
-        val arrayStart = chaptersStart + "\"chaptersData\":".length
-
-        // Find the end of the array by counting brackets
-        var bracketCount = 0
-        var arrayEnd = arrayStart
-        var inString = false
-        var escape = false
-
-        for (i in arrayStart until scriptContent.length) {
-            val c = scriptContent[i]
-            when {
-                escape -> escape = false
-                c == '\\' -> escape = true
-                c == '"' && !escape -> inString = !inString
-                !inString && c == '[' -> bracketCount++
-                !inString && c == ']' -> {
-                    bracketCount--
-                    if (bracketCount == 0) {
-                        arrayEnd = i + 1
-                        break
-                    }
-                }
-            }
-        }
-
-        if (bracketCount != 0) return emptyList()
-
-        val chaptersJsonStr = scriptContent.substring(arrayStart, arrayEnd)
+        val dataJson = match.groupValues[1]
             .replace("\\\"", "\"")
             .replace("\\\\", "\\")
-            .replace("\\n", "\n")
 
         try {
-            val chaptersArray = org.json.JSONArray(chaptersJsonStr)
-            return (0 until chaptersArray.length()).mapNotNull { i ->
+            val json = JSONObject(dataJson)
+            val mangaData = json.optJSONObject("mangaData") ?: return emptyList()
+            val postId = mangaData.getLong("postId")
+            val chaptersData = json.optJSONArray("chaptersData") ?: return emptyList()
+
+            return (0 until chaptersData.length()).mapNotNull { i ->
                 try {
-                    val ch = chaptersArray.getJSONObject(i)
+                    val ch = chaptersData.getJSONObject(i)
                     val chId = ch.getInt("id")
                     val chNum = ch.optDouble("chapter", 0.0).toFloat()
                     val chDate = ch.getString("postTime")
@@ -470,6 +444,7 @@ internal class Waveteamy(context: MangaLoaderContext) :
             return emptyList()
         }
     }
+
 
     private fun parseDate(dateStr: String): Long {
         if (dateStr.isBlank()) return 0L

@@ -256,29 +256,25 @@ internal abstract class NineMangaParser(
 			return allPages
 		}
 
-		// Fallback: Use captureDocument to get fully rendered page, then extract script
-		try {
-			val fullDoc = captureDocument(url)
-			val scriptContent = fullDoc.select("script").find { script ->
-				script.html().contains("all_imgs_url") && script.html().contains("[")
-			}?.html()
+		// Fallback: Check the already-loaded document for script
+		val scriptContent = doc.select("script").find { script ->
+			script.html().contains("all_imgs_url") && script.html().contains("[")
+		}?.html()
 
-			if (scriptContent != null) {
-				val imageUrls = extractImageUrlsFromScript(scriptContent)
-				if (imageUrls.isNotEmpty()) {
-					return imageUrls.mapIndexed { index, imageUrl ->
-						MangaPage(
-							id = generateUid("${chapter.id}-$index"),
-							url = imageUrl,
-							preview = null,
-							source = source
-						)
-					}
+		if (scriptContent != null) {
+			val imageUrls = extractImageUrlsFromScript(scriptContent)
+			if (imageUrls.isNotEmpty()) {
+				return imageUrls.mapIndexed { index, imageUrl ->
+					MangaPage(
+						id = generateUid("${chapter.id}-$index"),
+						url = imageUrl,
+						preview = null,
+						source = source
+					)
 				}
 			}
-		} catch (e: Exception) {
-			// captureDocument failed, continue to fallback
 		}
+
 
 		// Last resort: return empty list instead of crashing
 		return emptyList()

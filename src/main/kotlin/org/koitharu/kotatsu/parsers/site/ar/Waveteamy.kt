@@ -198,43 +198,253 @@ internal class Waveteamy(context: MangaLoaderContext) :
     override suspend fun getDetails(manga: Manga): Manga {
         val id = manga.url.substringAfterLast("/")
         val url = "https://$domain/series/$id"
+
+        // Add early debug info to see if method is called
         val doc = webClient.httpGet(url).parseHtml()
 
-        val scriptContent = doc.select("script").map { it.html() }
-            .find { it.contains("mangaData") && it.contains("chaptersData") }
-            ?: throw ParseException("Failed to find manga data", url)
+        // Try to get description from meta tag as fallback
+        val metaDescription = doc.selectFirst("meta[name=description]")?.attr("content")
 
-        val jsonStr = extractJson(scriptContent, url)
-        val json = JSONObject(jsonStr)
+        // Parse Next.js hydration data - find script with both mangaData and chaptersData
+        val allScripts = doc.select("script")
 
-        val mangaData = json.getJSONObject("mangaData")
-        val title = mangaData.getString("name")
-        val cover = mangaData.getString("cover")
-        val description = mangaData.optString("story").takeIf { it.isNotEmpty() && it != "null" }
-        val statusVal = mangaData.optInt("status")
-        val state = when (statusVal) {
-            0 -> MangaState.ONGOING
-            1 -> MangaState.FINISHED
-            else -> MangaState.ONGOING
+        // Find scripts that contain both mangaData and chaptersData
+        val candidateScripts = allScripts.filter { script ->
+            val html = script.html()
+            html.contains("mangaData") && html.contains("chaptersData")
         }
 
-        val authors = mutableSetOf<String>()
-        mangaData.optString("author").takeIf { it.isNotEmpty() && it != "null" }?.let { authors.add(it) }
-        mangaData.optString("artist").takeIf { it.isNotEmpty() && it != "null" }?.let { authors.add(it) }
+        // Prioritize scripts with escaped data format (the working format)
+        var scriptContent = candidateScripts.find { script ->
+            val html = script.html()
+            html.contains("\\\"postId\\\":") && html.contains("\\\"chaptersData\\\":[")
+        }?.html()
 
-        val genres = mangaData.optJSONArray("genre")?.let { arr ->
-            (0 until arr.length()).mapNotNull { i ->
-                val g = arr.optString(i)
-                if (g.isNotEmpty() && g != "null") MangaTag(key = g, title = g, source = source) else null
-            }.toSet()
-        } ?: emptySet()
+        // Fallback to any script with both required fields
+        if (scriptContent == null && candidateScripts.isNotEmpty()) {
+            scriptContent = candidateScripts.first().html()
+        }
 
-        val postId = mangaData.getLong("postId")
-        val chaptersData = json.optJSONArray("chaptersData")
-        val chapters = if (chaptersData != null) {
-            (0 until chaptersData.length()).mapNotNull { i ->
+        if (scriptContent == null) {
+            return manga.copy(
+                description = metaDescription ?: "No description available",
+                chapters = emptyList()
+            )
+        }
+
+        // Try the direct escaped extraction method first since it's confirmed to work
+        val directChapters = try {
+            extractChaptersDataDirectly(scriptContent, url)
+        } catch (e: Exception) {
+            emptyList()
+        }
+
+        if (directChapters.isNotEmpty()) {
+            // If direct extraction worked, use it and try to get basic manga data too
+            val basicMangaData = try {
+                extractBasicMangaData(scriptContent, url)
+            } catch (e: Exception) {
+                null
+            }
+
+            return manga.copy(
+                title = basicMangaData?.title ?: manga.title,
+                description = basicMangaData?.description ?: metaDescription ?: "No description available",
+                coverUrl = basicMangaData?.coverUrl ?: manga.coverUrl,
+                state = basicMangaData?.state,
+                authors = basicMangaData?.authors ?: emptySet(),
+                tags = basicMangaData?.tags ?: emptySet(),
+                chapters = directChapters,
+            )
+        }
+
+        // If direct extraction failed, try the original JSON extraction method
+        try {
+            val jsonStr = extractJson(scriptContent, url)
+            val json = JSONObject(jsonStr)
+
+            // Extract mangaData
+            val mangaData = json.getJSONObject("mangaData")
+            val title = mangaData.getString("name")
+            val cover = mangaData.getString("cover")
+            val description = mangaData.optString("story").takeIf { it.isNotEmpty() } ?: metaDescription
+            val statusVal = mangaData.optInt("status")
+            val state = when (statusVal) {
+                0 -> MangaState.ONGOING
+                1 -> MangaState.FINISHED
+                else -> MangaState.ONGOING
+            }
+
+            val authors = mutableSetOf<String>()
+            mangaData.optString("author").takeIf { it.isNotEmpty() && it != "null" }?.let { authors.add(it) }
+            mangaData.optString("artist").takeIf { it.isNotEmpty() && it != "null" }?.let { authors.add(it) }
+
+            val genres = mangaData.optJSONArray("genre")?.let { arr ->
+                (0 until arr.length()).mapNotNull { i ->
+                    val g = arr.getString(i)
+                    if (g.isNotEmpty()) MangaTag(key = g, title = g, source = source) else null
+                }.toSet()
+            } ?: emptySet()
+
+            // Get postId for chapter URLs (format: /series/postId/chapterNumber)
+            val postId = mangaData.getLong("postId")
+
+            // Extract chaptersData (should be at same level as mangaData)
+            val chaptersData = json.optJSONArray("chaptersData")
+            val chapters = if (chaptersData != null) {
+                (0 until chaptersData.length()).mapNotNull { i ->
+                    try {
+                        val ch = chaptersData.getJSONObject(i)
+                        val chId = ch.getInt("id")
+                        val chNum = ch.optDouble("chapter", 0.0).toFloat()
+                        val chDate = ch.getString("postTime")
+                        val chTitle = ch.optString("title").takeIf { it.isNotEmpty() && it != "null" }
+
+                        // Build chapter URL using postId and chapter number: /series/1048777954/30
+                        MangaChapter(
+                            id = generateUid(chId.toLong()),
+                            title = chTitle,
+                            number = chNum,
+                            volume = 0,
+                            url = "/series/$postId/${chNum.toInt()}",
+                            uploadDate = parseDate(chDate),
+                            source = source,
+                            scanlator = null,
+                            branch = null
+                        )
+                    } catch (e: Exception) {
+                        null // Skip malformed chapters
+                    }
+                }.reversed() // Reverse to show newest first
+            } else {
+                emptyList()
+            }
+
+            return manga.copy(
+                title = title,
+                description = description,
+                coverUrl = resolveCover(cover),
+                state = state,
+                authors = authors,
+                tags = genres,
+                chapters = chapters,
+            )
+        } catch (e: Exception) {
+            // Both methods failed - return basic info with any chapters we found
+            return manga.copy(
+                description = metaDescription ?: "No description available",
+                chapters = directChapters // Use whatever chapters were extracted, even if empty
+            )
+        }
+    }
+
+    private fun extractJson(script: String, url: String): String {
+        // Find the specific pattern from Next.js that contains the data we need
+        val mangaDataIndex = script.indexOf("\"mangaData\":")
+        val chaptersDataIndex = script.indexOf("\"chaptersData\":")
+
+        if (mangaDataIndex == -1 || chaptersDataIndex == -1) {
+            throw ParseException("Required data fields not found in script", url)
+        }
+
+        // Since chaptersData usually comes after mangaData, find the object that contains mangaData
+        var startIndex = -1
+        for (i in mangaDataIndex downTo 0) {
+            if (script[i] == '{') {
+                startIndex = i
+                break
+            }
+        }
+
+        if (startIndex == -1) throw ParseException("No opening brace found", url)
+
+        // Use a more sophisticated brace matching that handles strings properly
+        var braceCount = 0
+        var inString = false
+        var escape = false
+
+        for (i in startIndex until script.length) {
+            val c = script[i]
+
+            when {
+                escape -> escape = false
+                c == '\\' -> escape = true
+                c == '"' && !escape -> inString = !inString
+                !inString && c == '{' -> braceCount++
+                !inString && c == '}' -> {
+                    braceCount--
+                    if (braceCount == 0) {
+                        val candidate = script.substring(startIndex, i + 1)
+                        // Verify this contains both required fields
+                        if (candidate.contains("\"mangaData\":") && candidate.contains("\"chaptersData\":")) {
+                            return candidate.replace("\\\"", "\"")
+                                          .replace("\\\\", "\\")
+                                          .replace("\\n", "\n")
+                                          .replace("\\r", "\r")
+                                          .replace("\\t", "\t")
+                        }
+                    }
+                }
+            }
+        }
+
+        throw ParseException("Failed to extract valid JSON object", url)
+    }
+
+    private fun extractChaptersDataDirectly(scriptContent: String?, url: String): List<MangaChapter> {
+        if (scriptContent == null) return emptyList()
+
+        // Simple approach: find postId and chaptersData directly in the escaped format
+        val postIdMatch = Regex("""\\\"postId\\\":(\d+)""").find(scriptContent)
+        val postId = postIdMatch?.groupValues?.get(1)?.toLongOrNull() ?: return emptyList()
+
+        // Find chaptersData array in escaped format
+        val chaptersStart = scriptContent.indexOf("\\\"chaptersData\\\":[")
+        if (chaptersStart == -1) return emptyList()
+
+        // Start after the array opening
+        val arrayStart = chaptersStart + "\\\"chaptersData\\\":".length
+
+        // Find the matching closing bracket for the array
+        var depth = 0
+        var inString = false
+        var escape = false
+        var arrayEnd = arrayStart
+
+        for (i in arrayStart until scriptContent.length) {
+            val char = scriptContent[i]
+
+            when {
+                escape -> escape = false
+                char == '\\' -> escape = true
+                char == '"' && !escape -> inString = !inString
+                !inString -> {
+                    when (char) {
+                        '[' -> depth++
+                        ']' -> {
+                            depth--
+                            if (depth == 0) {
+                                arrayEnd = i + 1
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (depth != 0) return emptyList()
+
+        // Extract and unescape the array
+        val chaptersJson = scriptContent.substring(arrayStart, arrayEnd)
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\")
+
+        try {
+            val chaptersArray = org.json.JSONArray(chaptersJson)
+            return (0 until chaptersArray.length()).mapNotNull { i ->
                 try {
-                    val ch = chaptersData.getJSONObject(i)
+                    val ch = chaptersArray.getJSONObject(i)
                     val chId = ch.getInt("id")
                     val chNum = ch.optDouble("chapter", 0.0).toFloat()
                     val chDate = ch.getString("postTime")
@@ -254,104 +464,111 @@ internal class Waveteamy(context: MangaLoaderContext) :
                 } catch (e: Exception) {
                     null
                 }
-            }
-        } else {
-            emptyList()
+            }.reversed() // Reverse to show newest first
+        } catch (e: Exception) {
+            return emptyList()
         }
-
-        return manga.copy(
-            title = title,
-            description = description,
-            coverUrl = resolveCover(cover),
-            state = state,
-            authors = authors,
-            tags = genres,
-            chapters = chapters.reversed(),
-        )
     }
 
-    private fun extractJson(script: String, url: String): String {
-        // The script format is usually: self.__next_f.push([1,"5:[...{\"mangaData\":{...
-        // We need to find the object containing "mangaData" and "chaptersData" (or "currentChapter" for pages)
-        
-        // Find the start of the object we care about
-        val keyIndex = if (script.contains("\"mangaData\":")) {
-            script.indexOf("\"mangaData\":")
-        } else {
-            script.indexOf("\"currentChapter\":")
-        }
-        
-        if (keyIndex == -1) throw ParseException("Required data not found", url)
+    private data class BasicMangaData(
+        val title: String?,
+        val description: String?,
+        val coverUrl: String?,
+        val state: MangaState?,
+        val authors: Set<String>,
+        val tags: Set<MangaTag>
+    )
 
-        // Walk backwards to find the opening brace of this object
-        var startIndex = -1
-        var braceBalance = 0
-        // We look for the closest '{' before the key that is at the same nesting level
-        // But since we are inside a string in the push array, it's tricky.
-        // However, the user snippet shows: ... "5:[[\"$\",\"script\",null,{\"type\":\"application/ld+json\",\"dangerouslySetInnerHTML\":{\"__html\":\"$19\"}}],[\"$\",\"$L1a\",null,{\"initialData\":{\"workInfo\":...
-        // The data is often inside an escaped string.
-        
-        // Let's try a simpler approach: extract the whole JSON string containing the key, then parse it.
-        // The data seems to be inside `self.__next_f.push` arguments.
-        // It's often in the form: `self.__next_f.push([1,"...string with json..."])`
-        
-        // Let's try to find the opening brace of the object containing the key.
-        for (i in keyIndex downTo 0) {
-            if (script[i] == '{') {
-                startIndex = i
-                break
-            }
-        }
-        
-        if (startIndex == -1) throw ParseException("Could not find start of JSON object", url)
+    private fun extractBasicMangaData(scriptContent: String?, url: String): BasicMangaData? {
+        if (scriptContent == null) return null
 
-        // Now find the matching closing brace
-        var braceCount = 0
-        var inString = false
-        var escape = false
-        
-        for (i in startIndex until script.length) {
-            val c = script[i]
-            if (escape) {
-                escape = false
-                continue
-            }
-            if (c == '\\') {
-                escape = true
-                continue
-            }
-            if (c == '"') {
-                inString = !inString
-                continue
-            }
-            if (!inString) {
-                if (c == '{') braceCount++
-                if (c == '}') {
-                    braceCount--
-                    if (braceCount == 0) {
-                        val jsonCandidate = script.substring(startIndex, i + 1)
-                        // Unescape the JSON string if it was inside a string literal
-                        // The Next.js format often has the JSON stringified inside the push array
-                        // e.g. "5:[...]"
-                        // But here we are extracting just the object part `{...}`. 
-                        // If it was escaped like `{\"mangaData\":...}`, our substring will be `{\"mangaData\":...}`
-                        // We need to unescape it.
-                        return jsonCandidate.replace("\\\"", "\"").replace("\\\\", "\\")
+        try {
+            // Find mangaData in escaped format
+            val mangaDataStart = scriptContent.indexOf("\\\"mangaData\\\":{")
+            if (mangaDataStart == -1) return null
+
+            // Start after the key and opening brace
+            val dataStart = mangaDataStart + "\\\"mangaData\\\":".length
+
+            // Find the matching closing brace for the object
+            var depth = 0
+            var inString = false
+            var escape = false
+            var dataEnd = dataStart
+
+            for (i in dataStart until scriptContent.length) {
+                val char = scriptContent[i]
+
+                when {
+                    escape -> escape = false
+                    char == '\\' -> escape = true
+                    char == '"' && !escape -> inString = !inString
+                    !inString -> {
+                        when (char) {
+                            '{' -> depth++
+                            '}' -> {
+                                depth--
+                                if (depth == 0) {
+                                    dataEnd = i + 1
+                                    break
+                                }
+                            }
+                        }
                     }
                 }
             }
+
+            if (depth != 0) return null
+
+            // Extract and unescape the object
+            val mangaDataJson = scriptContent.substring(dataStart, dataEnd)
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\")
+
+            val mangaData = JSONObject(mangaDataJson)
+
+            val title = mangaData.optString("name").takeIf { it.isNotEmpty() }
+            val description = mangaData.optString("story").takeIf { it.isNotEmpty() && it != "null" }
+            val cover = mangaData.optString("cover").takeIf { it.isNotEmpty() }
+            val statusVal = mangaData.optInt("status", -1)
+            val state = when (statusVal) {
+                0 -> MangaState.ONGOING
+                1 -> MangaState.FINISHED
+                else -> null
+            }
+
+            val authors = mutableSetOf<String>()
+            mangaData.optString("author").takeIf { it.isNotEmpty() && it != "null" }?.let { authors.add(it) }
+            mangaData.optString("artist").takeIf { it.isNotEmpty() && it != "null" }?.let { authors.add(it) }
+
+            val genres = mangaData.optJSONArray("genre")?.let { arr ->
+                (0 until arr.length()).mapNotNull { i ->
+                    val g = arr.optString(i)
+                    if (g.isNotEmpty() && g != "null") MangaTag(key = g, title = g, source = source) else null
+                }.toSet()
+            } ?: emptySet()
+
+            return BasicMangaData(
+                title = title,
+                description = description,
+                coverUrl = cover?.let { resolveCover(it) },
+                state = state,
+                authors = authors,
+                tags = genres
+            )
+        } catch (e: Exception) {
+            return null
         }
-        throw ParseException("Could not find end of JSON object", url)
     }
 
     private fun parseDate(dateStr: String): Long {
         if (dateStr.isBlank()) return 0L
 
         val formats = listOf(
-            "yyyy-MM-dd'T'HH:mm:ss+00:00",
-            "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
-            "yyyy-MM-dd'T'HH:mm:ss",
-            "yyyy-MM-dd HH:mm:ss",
+            "yyyy-MM-dd'T'HH:mm:ss+00:00", // 2025-11-20T09:16:26+00:00
+            "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", // Standard ISO format
+            "yyyy-MM-dd'T'HH:mm:ss", // Without timezone
+            "yyyy-MM-dd HH:mm:ss", // 2025-11-13 16:05:54
         )
 
         for (pattern in formats) {
@@ -361,9 +578,10 @@ internal class Waveteamy(context: MangaLoaderContext) :
                 // Try next format
             }
         }
-        
+
+        // If all formats fail, try to parse just the date part
         try {
-            val datePart = dateStr.substring(0, 10)
+            val datePart = dateStr.substring(0, 10) // Extract yyyy-MM-dd
             return SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(datePart)?.time ?: 0L
         } catch (e: Exception) {
             return 0L
@@ -373,44 +591,89 @@ internal class Waveteamy(context: MangaLoaderContext) :
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
         val url = "https://$domain${chapter.url}"
         val doc = webClient.httpGet(url).parseHtml()
-        
-        // Parse Next.js hydration data for pages
-        // Look for script containing "currentChapter" and "images"
-        val scriptContent = doc.select("script").map { it.html() }
-            .find { it.contains("currentChapter") && it.contains("images") }
-            ?: throw ParseException("Failed to find chapter data", url)
 
-        val jsonStr = extractJson(scriptContent, url)
-        val json = JSONObject(jsonStr)
-        
-        // The structure based on user log: {"initialData":{..., "currentChapter":{"id":..., "images":[...]}}}
-        // Or sometimes directly the object with currentChapter if we extracted that deep.
-        
-        val currentChapter = if (json.has("currentChapter")) {
-            json.getJSONObject("currentChapter")
-        } else if (json.has("initialData")) {
-            json.getJSONObject("initialData").getJSONObject("currentChapter")
-        } else {
-            // Fallback: maybe we extracted the currentChapter object itself?
-            if (json.has("images")) json else throw ParseException("Could not find currentChapter object", url)
+        // Find script with currentChapter data
+        val allScripts = doc.select("script")
+        val scriptContent = allScripts.find { script ->
+            val html = script.html()
+            html.contains("currentChapter") && html.contains("images")
+        }?.html()
+
+        if (scriptContent == null) {
+            throw ParseException("Could not find chapter images data", url)
         }
-        
-        val images = currentChapter.getJSONArray("images")
-        
-        return (0 until images.length()).map { i ->
-            val imagePath = images.getString(i)
+
+        // Extract images from currentChapter.images array
+        val images = try {
+            extractImagesFromScript(scriptContent)
+        } catch (e: Exception) {
+            throw ParseException("Failed to extract images: ${e.message}", url)
+        }
+
+        return images.mapIndexed { i, imagePath ->
             val imageUrl = if (imagePath.startsWith("http")) {
                 imagePath
             } else {
                 "https://wcloud.site/$imagePath"
             }
-            
+
             MangaPage(
                 id = generateUid("${chapter.id}-$i"),
                 url = imageUrl,
                 preview = null,
                 source = source
             )
+        }
+    }
+
+    private fun extractImagesFromScript(scriptContent: String): List<String> {
+        // Find currentChapter object in escaped format
+        val currentChapterStart = scriptContent.indexOf("\\\"currentChapter\\\":{")
+        if (currentChapterStart == -1) return emptyList()
+
+        // Start after the key and opening brace
+        val dataStart = currentChapterStart + "\\\"currentChapter\\\":".length
+
+        // Find the matching closing brace for the object
+        var depth = 0
+        var inString = false
+        var escape = false
+        var dataEnd = dataStart
+
+        for (i in dataStart until scriptContent.length) {
+            val char = scriptContent[i]
+
+            when {
+                escape -> escape = false
+                char == '\\' -> escape = true
+                char == '"' && !escape -> inString = !inString
+                !inString -> {
+                    when (char) {
+                        '{' -> depth++
+                        '}' -> {
+                            depth--
+                            if (depth == 0) {
+                                dataEnd = i + 1
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (depth != 0) return emptyList()
+
+        // Extract and unescape the object
+        val currentChapterJson = scriptContent.substring(dataStart, dataEnd)
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\")
+
+        val currentChapter = JSONObject(currentChapterJson)
+        val imagesArray = currentChapter.optJSONArray("images") ?: return emptyList()
+
+        return (0 until imagesArray.length()).map { i ->
+            imagesArray.getString(i)
         }
     }
 }

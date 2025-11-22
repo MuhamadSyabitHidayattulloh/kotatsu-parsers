@@ -73,32 +73,26 @@ internal class AnimeSama(context: MangaLoaderContext) :
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
 		val url = buildListUrl(page, order, filter)
 		val doc = webClient.httpGet(url).parseHtml()
-
-		return if (url.toString() == "$baseUrl/") {
-			parseHomePageScans(doc)
-		} else {
-			parseCataloguePage(doc)
-		}
+		return parseCataloguePage(doc)
 	}
 
-	private fun buildListUrl(page: Int, order: SortOrder, filter: MangaListFilter) = when {
-		filter.query.isNullOrEmpty().not() || filter.tags.isNotEmpty() -> {
-			"$baseUrl/catalogue".toHttpUrl().newBuilder()
-				.addQueryParameter("type[0]", "Scans")
-				.apply {
-					filter.query?.let { addQueryParameter("search", it) }
-					filter.tags.forEach { tag ->
-						addQueryParameter("genre[]", tag.key)
-					}
-				}
-				.addQueryParameter("page", page.toString())
-				.build()
-		}
+	private fun buildListUrl(page: Int, order: SortOrder, filter: MangaListFilter): HttpUrl {
+		return "$baseUrl/catalogue".toHttpUrl().newBuilder()
+			.addQueryParameter("type[]", "Scans")
+			.apply {
+				// Add search parameter (empty if no query)
+				addQueryParameter("search", filter.query ?: "")
 
-		order == SortOrder.UPDATED && page == 1 -> baseUrl.toHttpUrl()
-		else -> "$baseUrl/catalogue".toHttpUrl().newBuilder()
-			.addQueryParameter("type[0]", "Scans")
-			.addQueryParameter("page", page.toString())
+				// Add genre filters
+				filter.tags.forEach { tag ->
+					addQueryParameter("genre[]", tag.key)
+				}
+
+				// Add page parameter (only if not page 1)
+				if (page > 1) {
+					addQueryParameter("page", page.toString())
+				}
+			}
 			.build()
 	}
 

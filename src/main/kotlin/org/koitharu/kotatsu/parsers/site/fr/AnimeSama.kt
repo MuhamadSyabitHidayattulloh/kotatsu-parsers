@@ -1,6 +1,7 @@
 package org.koitharu.kotatsu.parsers.site.fr
 
 import okhttp3.Headers
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element

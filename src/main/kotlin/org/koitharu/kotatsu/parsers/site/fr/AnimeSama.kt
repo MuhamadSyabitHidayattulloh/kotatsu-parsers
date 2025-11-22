@@ -32,7 +32,7 @@ import java.util.EnumSet
 internal class AnimeSama(context: MangaLoaderContext) :
 	PagedMangaParser(context, source = MangaParserSource.ANIMESAMA, 96) {
 
-	override val configKeyDomain = ConfigKey.Domain("anime-sama.fr")
+	override val configKeyDomain = ConfigKey.Domain("anime-sama.org")
 	private val baseUrl = "https://$domain"
 	private val cdnUrl = "$baseUrl/s2/scans/"
 

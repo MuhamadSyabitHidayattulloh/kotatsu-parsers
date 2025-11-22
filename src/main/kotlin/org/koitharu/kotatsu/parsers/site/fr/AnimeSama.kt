@@ -53,9 +53,10 @@ internal class AnimeSama(context: MangaLoaderContext) :
 
 	override suspend fun getFilterOptions(): MangaListFilterOptions {
 		val doc = webClient.httpGet("$baseUrl/catalogue").parseHtml()
-		val genres = doc.select("#list_genres label").mapNotNull { labelElement ->
-			val input = labelElement.selectFirst("input[name=genre[]]") ?: return@mapNotNull null
-			val labelText = labelElement.ownText()
+		val genres = doc.select("#genreList label.filter-checkbox-item").mapNotNull { labelElement ->
+			val input = labelElement.selectFirst("input.filter-checkbox[name=\"genre[]\"]") ?: return@mapNotNull null
+			val spanElement = labelElement.selectFirst("span") ?: return@mapNotNull null
+			val labelText = spanElement.text()
 			val value = input.attr("value")
 			MangaTag(
 				key = value,
@@ -102,10 +103,10 @@ internal class AnimeSama(context: MangaLoaderContext) :
 	}
 
 	private fun parseCataloguePage(doc: Document): List<Manga> {
-		return doc.select("#list_catalog > div").mapNotNull { element ->
+		return doc.select("div.catalog-card").mapNotNull { element ->
 			val a = element.selectFirst("a") ?: return@mapNotNull null
-			val title = element.selectFirst("h1")?.text() ?: return@mapNotNull null
-			val cover = element.selectFirst("img")?.attr("src") ?: return@mapNotNull null
+			val title = element.selectFirst("h2.card-title")?.text() ?: return@mapNotNull null
+			val cover = element.selectFirst("img.card-image")?.attr("src") ?: return@mapNotNull null
 			val href = a.attr("href").removeSuffix("/")
 
 			createManga(

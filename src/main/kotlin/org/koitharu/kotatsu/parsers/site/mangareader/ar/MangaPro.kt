@@ -7,10 +7,9 @@ import org.koitharu.kotatsu.parsers.model.MangaListFilterCapabilities
 import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.koitharu.kotatsu.parsers.site.mangareader.MangaReaderParser
 
-@Broken
 @MangaSourceParser("MANGAPRO", "MangaPro", "ar")
 internal class MangaPro(context: MangaLoaderContext) :
-	MangaReaderParser(context, MangaParserSource.MANGAPRO, "promanga.pro", pageSize = 20, searchPageSize = 10) {
+	MangaReaderParser(context, MangaParserSource.MANGAPRO, "prochan.pro", pageSize = 20, searchPageSize = 10) {
 	override val filterCapabilities: MangaListFilterCapabilities
 		get() = super.filterCapabilities.copy(
 			isTagsExclusionSupported = false,

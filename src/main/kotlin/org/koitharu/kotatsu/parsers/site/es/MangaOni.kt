@@ -104,9 +104,18 @@ internal class MangaOni(context: MangaLoaderContext) :
 		}.build().toString()
 	}
 
-	private fun getGenreParam(filter: MangaListFilter): String {
-		return filter.tags.firstOrNull()?.key ?: "false"
-	}
+    private fun getGenreParam(filter: MangaListFilter): String {
+        val tag = filter.tags.firstOrNull() ?: return "false"
+        // If key is already numeric, use it
+        if (tag.key.all { it.isDigit() }) {
+            return tag.key
+        }
+        // Otherwise try to resolve by title (case-insensitive)
+        val byTitle = getAvailableTags().firstOrNull {
+            it.title.equals(tag.key, ignoreCase = true) || it.title.equals(tag.title, ignoreCase = true)
+        }
+        return byTitle?.key ?: "false"
+    }
 
 	private fun getStateParam(filter: MangaListFilter): String {
 		return when (filter.states.firstOrNull()) {

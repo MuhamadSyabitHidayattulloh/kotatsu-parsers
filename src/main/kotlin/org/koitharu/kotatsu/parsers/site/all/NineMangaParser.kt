@@ -184,7 +184,7 @@ internal abstract class NineMangaParser(
             .build()
 
         val response = webClient.httpGet(url, headers)
-        val doc = response.parseHtml()
+        val doc = followJavaScriptRedirect(response, headers)
 
         // Try to extract images from JavaScript first (for redirected pages)
         val scriptContent = doc.select("script[type*=javascript]").firstOrNull { script ->
@@ -244,17 +244,7 @@ internal abstract class NineMangaParser(
             } else {
                 try {
                     val pageResponse = webClient.httpGet(pageUrl, headers)
-                    var pageDoc = pageResponse.parseHtml()
-
-                    // Check if we've been redirected to a different domain, follow the redirect
-                    val pageResponseUrl = pageResponse.request.url.host
-                    if (!pageResponseUrl.contains("ninemanga", ignoreCase = true)) {
-                        // Simply follow the redirected URL directly
-                        val redirectedResponse = webClient.httpGet(pageResponse.request.url.toString(), headers)
-                        pageDoc = redirectedResponse.parseHtml()
-                    }
-
-                    pageDoc
+                    followJavaScriptRedirect(pageResponse, headers)
                 } catch (e: Exception) {
                     continue // Skip failed pages
                 }
@@ -289,16 +279,7 @@ internal abstract class NineMangaParser(
 
                         try {
                             val pageResponse = webClient.httpGet(fullPageUrl, headers)
-                            var pageDoc = pageResponse.parseHtml()
-
-                            // Check if we've been redirected to a different domain, follow the redirect
-                            val pageResponseUrl = pageResponse.request.url.host
-                            if (!pageResponseUrl.contains("ninemanga", ignoreCase = true)) {
-                                // Simply follow the redirected URL directly
-                                val redirectedResponse = webClient.httpGet(pageResponse.request.url.toString(), headers)
-                                pageDoc = redirectedResponse.parseHtml()
-                            }
-
+                            val pageDoc = followJavaScriptRedirect(pageResponse, headers)
                             val images = pageDoc.select("img.manga_pic")
 
                             for (img in images) {
@@ -347,15 +328,7 @@ internal abstract class NineMangaParser(
             .build()
 
         val response = webClient.httpGet(url, headers)
-        var doc = response.parseHtml()
-
-        // Check if we've been redirected to a different domain, follow the redirect
-        val responseUrl = response.request.url.host
-        if (!responseUrl.contains("ninemanga", ignoreCase = true)) {
-            // Simply follow the redirected URL directly
-            val redirectedResponse = webClient.httpGet(response.request.url.toString(), headers)
-            doc = redirectedResponse.parseHtml()
-        }
+        val doc = followJavaScriptRedirect(response, headers)
 
         val root = doc.body()
         return root.selectFirst("img.manga_pic")?.attrAsAbsoluteUrl("src")
@@ -364,6 +337,41 @@ internal abstract class NineMangaParser(
 
     private var tagCache: ArrayMap<String, MangaTag>? = null
     private val mutex = Mutex()
+
+    private suspend fun followJavaScriptRedirect(response: okhttp3.Response, headers: okhttp3.Headers): Document {
+        var doc = response.parseHtml()
+
+        // Check if we've been redirected to a different domain
+        val responseUrl = response.request.url.host
+        if (!responseUrl.contains("ninemanga", ignoreCase = true)) {
+            // Check for JavaScript redirect
+            val jsRedirectScript = doc.select("script").firstOrNull { script ->
+                script.html().contains("window.location.href")
+            }
+
+            if (jsRedirectScript != null) {
+                val redirectRegex = """window\.location\.href\s*=\s*["']([^"']+)["']""".toRegex()
+                val match = redirectRegex.find(jsRedirectScript.html())
+                if (match != null) {
+                    val redirectPath = match.groupValues[1]
+                    val redirectUrl = if (redirectPath.startsWith("http")) {
+                        redirectPath
+                    } else {
+                        "${response.request.url.scheme}://${response.request.url.host}$redirectPath"
+                    }
+
+                    // Follow the JavaScript redirect with proper referer
+                    val redirectHeaders = headers.newBuilder()
+                        .set("Referer", response.request.url.toString())
+                        .build()
+                    val redirectedResponse = webClient.httpGet(redirectUrl, redirectHeaders)
+                    doc = redirectedResponse.parseHtml()
+                }
+            }
+        }
+
+        return doc
+    }
 
     private suspend fun getOrCreateTagMap(): Map<String, MangaTag> = mutex.withLock {
         tagCache?.let { return@withLock it }

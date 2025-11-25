@@ -105,7 +105,7 @@ internal class MangaOni(context: MangaLoaderContext) :
 	}
 
 	private fun getGenreParam(filter: MangaListFilter): String {
-		return filter.tags.firstOrNull()?.key ?: "false"
+		return filter.tags.firstOrNull()?.title ?: "false"
 	}
 
 	private fun getStateParam(filter: MangaListFilter): String {
@@ -163,7 +163,6 @@ internal class MangaOni(context: MangaLoaderContext) :
 		return doc.select("div._2NNxg").mapNotNull { element ->
 			val linkElement = element.selectFirst("a") ?: return@mapNotNull null
 			val href = linkElement.attr("href")
-			val coverUrl = element.selectFirst("img")?.attr("src") ?: ""
 
 			Manga(
 				id = generateUid(href),
@@ -173,7 +172,7 @@ internal class MangaOni(context: MangaLoaderContext) :
 				publicUrl = href.toAbsoluteUrl(domain),
 				rating = RATING_UNKNOWN,
 				contentRating = ContentRating.SAFE, // Will be properly set in getDetails()
-				coverUrl = coverUrl,
+                coverUrl = element.select("img").attr("src"),
 				largeCoverUrl = null,
 				tags = emptySet(),
 				state = null,
@@ -275,43 +274,43 @@ internal class MangaOni(context: MangaLoaderContext) :
 
 	private fun getAvailableTags(): Set<MangaTag> {
 		return setOf(
-			MangaTag("1", "Comedia", source),
-			MangaTag("2", "Drama", source),
-			MangaTag("3", "Acción", source),
-			MangaTag("4", "Escolar", source),
-			MangaTag("5", "Romance", source),
-			MangaTag("6", "Ecchi", source),
-			MangaTag("7", "Aventura", source),
-			MangaTag("8", "Shōnen", source),
-			MangaTag("9", "Shōjo", source),
-			MangaTag("10", "Deportes", source),
-			MangaTag("11", "Psicológico", source),
-			MangaTag("12", "Fantasía", source),
-			MangaTag("13", "Mecha", source),
-			MangaTag("14", "Gore", source),
-			MangaTag("15", "Yaoi", source),
-			MangaTag("16", "Yuri", source),
-			MangaTag("17", "Misterio", source),
-			MangaTag("18", "Sobrenatural", source),
-			MangaTag("19", "Seinen", source),
-			MangaTag("20", "Ficción", source),
-			MangaTag("21", "Harem", source),
-			MangaTag("25", "Webtoon", source),
-			MangaTag("27", "Histórico", source),
-			MangaTag("30", "Musical", source),
-			MangaTag("31", "Ciencia ficción", source),
-			MangaTag("32", "Shōjo-ai", source),
-			MangaTag("33", "Josei", source),
-			MangaTag("34", "Magia", source),
-			MangaTag("35", "Artes Marciales", source),
-			MangaTag("36", "Horror", source),
-			MangaTag("37", "Demonios", source),
-			MangaTag("38", "Supervivencia", source),
-			MangaTag("39", "Recuentos de la vida", source),
-			MangaTag("40", "Shōnen ai", source),
-			MangaTag("41", "Militar", source),
-			MangaTag("42", "Eroge", source),
-			MangaTag("43", "Isekai", source),
+			MangaTag("Comedia", "1", source),
+			MangaTag("Drama", "2", source),
+			MangaTag("Acción", "3", source),
+			MangaTag("Escolar", "4", source),
+			MangaTag("Romance", "5", source),
+			MangaTag("Ecchi", "6", source),
+			MangaTag("Aventura", "7", source),
+			MangaTag("Shōnen", "8", source),
+			MangaTag("Shōjo", "9", source),
+			MangaTag("Deportes", "10", source),
+			MangaTag("Psicológico", "11", source),
+			MangaTag("Fantasía", "12", source),
+			MangaTag("Mecha", "13", source),
+			MangaTag("Gore", "14", source),
+			MangaTag("Yaoi", "15", source),
+			MangaTag("Yuri", "16", source),
+			MangaTag("Misterio", "17", source),
+			MangaTag("Sobrenatural", "18", source),
+			MangaTag("Seinen", "19", source),
+			MangaTag("Ficción", "20", source),
+			MangaTag("Harem", "21", source),
+			MangaTag("Webtoon", "25", source),
+			MangaTag("Histórico", "27", source),
+			MangaTag("Musical", "30", source),
+			MangaTag("Ciencia ficción", "31", source),
+			MangaTag("Shōjo-ai", "32", source),
+			MangaTag("Josei", "33", source),
+			MangaTag("Magia", "34", source),
+			MangaTag("Artes Marciales", "35", source),
+			MangaTag("Horror", "36", source),
+			MangaTag("Demonios", "37", source),
+			MangaTag("Supervivencia", "38", source),
+			MangaTag("Recuentos de la vida", "39", source),
+			MangaTag("Shōnen ai", "40", source),
+			MangaTag("Militar", "41", source),
+			MangaTag("Eroge", "42", source),
+			MangaTag("Isekai", "43", source),
 		)
 	}
 }

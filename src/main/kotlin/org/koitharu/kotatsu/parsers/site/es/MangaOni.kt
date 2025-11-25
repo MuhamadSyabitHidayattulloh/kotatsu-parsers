@@ -49,17 +49,38 @@ internal class MangaOni(context: MangaLoaderContext) :
 	}
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
-		val url = if (!filter.query.isNullOrEmpty()) {
-			buildSearchUrl(page, filter.query!!)
-		} else {
-			buildDirectoryUrl(page, order, filter)
-		}
-
-		val doc = webClient.httpGet(url).parseHtml()
-		return if (url.contains("/buscar")) {
+		return if (!filter.query.isNullOrEmpty()) {
+			// Search results
+			val url = buildSearchUrl(page, filter.query!!)
+			val doc = webClient.httpGet(url).parseHtml()
 			parseSearchResults(doc)
 		} else {
-			parseDirectoryResults(doc)
+			// Directory results with NSFW detection
+			getDirectoryWithNsfwDetection(page, order, filter)
+		}
+	}
+
+	private suspend fun getDirectoryWithNsfwDetection(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
+		// Get all manga (including NSFW)
+		val allUrl = buildDirectoryUrl(page, order, filter, includeNsfw = true)
+		val allDoc = webClient.httpGet(allUrl).parseHtml()
+		val allManga = parseDirectoryResults(allDoc)
+
+		// Get safe manga only (no NSFW)
+		val safeUrl = buildDirectoryUrl(page, order, filter, includeNsfw = false)
+		val safeDoc = webClient.httpGet(safeUrl).parseHtml()
+		val safeManga = parseDirectoryResults(safeDoc)
+		val safeMangaUrls = safeManga.map { it.url }.toSet()
+
+		// Mark NSFW content by comparing results
+		return allManga.map { manga ->
+			manga.copy(
+				contentRating = if (safeMangaUrls.contains(manga.url)) {
+					ContentRating.SAFE
+				} else {
+					ContentRating.ADULT
+				}
+			)
 		}
 	}
 
@@ -71,13 +92,13 @@ internal class MangaOni(context: MangaLoaderContext) :
 			.toString()
 	}
 
-	private fun buildDirectoryUrl(page: Int, order: SortOrder, filter: MangaListFilter): String {
+	private fun buildDirectoryUrl(page: Int, order: SortOrder, filter: MangaListFilter, includeNsfw: Boolean = true): String {
 		return "https://$domain/directorio".toHttpUrl().newBuilder().apply {
 			addQueryParameter("genero", getGenreParam(filter))
 			addQueryParameter("estado", getStateParam(filter))
 			addQueryParameter("filtro", getSortParam(order))
 			addQueryParameter("tipo", getTypeParam(filter))
-			addQueryParameter("adulto", "false") // Include all content, we'll categorize by contentRating
+			addQueryParameter("adulto", if (includeNsfw) "false" else "0")
 			addQueryParameter("orden", "desc")
 			addQueryParameter("p", page.toString())
 		}.build().toString()
@@ -100,7 +121,7 @@ internal class MangaOni(context: MangaLoaderContext) :
 			SortOrder.POPULARITY -> "visitas"
 			SortOrder.UPDATED -> "id"
 			SortOrder.ALPHABETICAL -> "nombre"
-			else -> "visitas"
+			else -> "id" // Default to recent updates
 		}
 	}
 
@@ -139,9 +160,10 @@ internal class MangaOni(context: MangaLoaderContext) :
 	}
 
 	private fun parseSearchResults(doc: Document): List<Manga> {
-		return doc.select("#article-div > div").mapNotNull { element ->
-			val linkElement = element.select("div a").firstOrNull() ?: return@mapNotNull null
+		return doc.select("div._2NNxg").mapNotNull { element ->
+			val linkElement = element.selectFirst("a") ?: return@mapNotNull null
 			val href = linkElement.attr("href")
+			val coverUrl = element.selectFirst("img")?.attr("src") ?: ""
 
 			Manga(
 				id = generateUid(href),
@@ -151,7 +173,7 @@ internal class MangaOni(context: MangaLoaderContext) :
 				publicUrl = href.toAbsoluteUrl(domain),
 				rating = RATING_UNKNOWN,
 				contentRating = ContentRating.SAFE, // Will be properly set in getDetails()
-				coverUrl = element.select("img").attr("src"),
+				coverUrl = coverUrl,
 				largeCoverUrl = null,
 				tags = emptySet(),
 				state = null,
@@ -163,10 +185,6 @@ internal class MangaOni(context: MangaLoaderContext) :
 		}
 	}
 
-	private fun isNsfwContent(genres: Set<MangaTag>): Boolean {
-		val nsfwGenres = setOf("Ecchi", "Yaoi", "Yuri", "Gore", "Eroge", "Shōjo-ai", "Shōnen ai")
-		return genres.any { tag -> nsfwGenres.contains(tag.title) }
-	}
 
 	override suspend fun getDetails(manga: Manga): Manga {
 		val doc = webClient.httpGet(manga.url.toAbsoluteUrl(domain)).parseHtml()
@@ -203,7 +221,7 @@ internal class MangaOni(context: MangaLoaderContext) :
 			tags = genres,
 			state = state,
 			chapters = chapters,
-			contentRating = if (isNsfwContent(genres)) ContentRating.ADULT else ContentRating.SAFE,
+			// Keep existing contentRating from list page (determined by dual search)
 		)
 	}
 
@@ -223,7 +241,7 @@ internal class MangaOni(context: MangaLoaderContext) :
 				branch = null,
 				source = source,
 			)
-		}
+		}.asReversed()
 	}
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {

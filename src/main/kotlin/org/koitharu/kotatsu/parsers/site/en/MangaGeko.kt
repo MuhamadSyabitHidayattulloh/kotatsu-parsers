@@ -41,17 +41,18 @@ internal class MangaGeko(context: MangaLoaderContext) :
 	}
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
+		// Use autocomplete API for search queries
+		if (!filter.query.isNullOrEmpty()) {
+			return getSearchResults(filter.query!!)
+		}
+
+		// Use regular browse for non-search requests
 		val url = buildString {
 			append("https://")
 			append(domain)
 			append("/browse-comics/")
 
 			val params = mutableListOf<String>()
-
-			// Add search query
-			if (!filter.query.isNullOrEmpty()) {
-				params.add("q=${filter.query.urlEncoded()}")
-			}
 
 			// Add page parameter
 			if (page > 1) {
@@ -93,6 +94,33 @@ internal class MangaGeko(context: MangaLoaderContext) :
 			val href = article.selectFirstOrThrow("h3.comic-card__title a").attrAsRelativeUrl("href")
 			val title = article.selectFirstOrThrow("h3.comic-card__title a").text()
 			val coverUrl = article.selectFirst("div.comic-card__cover img")?.src() ?: ""
+
+			Manga(
+				id = generateUid(href),
+				title = title,
+				altTitles = emptySet(),
+				url = href,
+				publicUrl = href.toAbsoluteUrl(domain),
+				rating = RATING_UNKNOWN,
+				contentRating = null,
+				coverUrl = coverUrl,
+				tags = emptySet(),
+				state = null,
+				authors = emptySet(),
+				source = source,
+			)
+		}
+	}
+
+	private suspend fun getSearchResults(query: String): List<Manga> {
+		val url = "https://$domain/autocomplete?term=${query.urlEncoded()}"
+		val doc = webClient.httpGet(url).parseHtml()
+
+		return doc.select("li.novel-item").mapNotNull { item ->
+			val a = item.selectFirst("a") ?: return@mapNotNull null
+			val href = a.attrAsRelativeUrl("href")
+			val title = item.selectFirst("h4.novel-title")?.text()?.replace(Regex("<mark>|</mark>"), "") ?: return@mapNotNull null
+			val coverUrl = item.selectFirst("img")?.src() ?: ""
 
 			Manga(
 				id = generateUid(href),

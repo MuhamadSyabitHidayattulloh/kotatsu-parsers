@@ -458,11 +458,10 @@ internal class ComickFunParser(context: MangaLoaderContext) :
 		val chapterData = jo.getJSONObject("chapter")
 		val images = chapterData.getJSONArray("images")
 
-		return images.mapIndexedNotNull { index, imageObj ->
-			val imageData = imageObj as JSONObject
+		return images.mapJSON { imageData ->
 			val imageUrl = imageData.getString("url")
 			MangaPage(
-				id = generateUid("$imageUrl-$index"),
+				id = generateUid(imageUrl),
 				url = imageUrl,
 				preview = null,
 				source = source,

@@ -31,7 +31,7 @@ internal abstract class ComicasoParser(
 
 	override val filterCapabilities: MangaListFilterCapabilities
 		get() = MangaListFilterCapabilities(
-			isMultipleTagsSupported = true,
+			isMultipleTagsSupported = false,
 			isTagsExclusionSupported = false,
 			isSearchSupported = true,
 			isSearchWithFiltersSupported = true,

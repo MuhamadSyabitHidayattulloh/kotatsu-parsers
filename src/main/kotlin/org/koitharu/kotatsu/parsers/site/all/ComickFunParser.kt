@@ -406,18 +406,19 @@ internal class ComickFunParser(context: MangaLoaderContext) :
 
 		val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'", Locale.ENGLISH)
 
-		// Process and deduplicate chapters - store chapter with metadata
-		val chapterMap = mutableMapOf<String, Pair<MangaChapter, Int>>() // Chapter with upvote count
+		// First pass: organize all chapters by number and analyze team completeness
+		val chaptersByNumber = mutableMapOf<Float, MutableList<JSONObject>>()
+		val teamStats = mutableMapOf<String, Int>() // Team name -> chapter count
 
-		for ((index, jo) in chapters.withIndex()) {
-			val vol = jo.optString("vol").takeIf { it.isNotBlank() && it != "null" }
+		for (jo in chapters) {
 			val chap = jo.optString("chap").takeIf { it.isNotBlank() } ?: "0"
-			val title = jo.optString("title").takeIf { it.isNotBlank() }
 			val lang = jo.optString("lang", "en")
-			val upCount = jo.optInt("up_count", 0)
-			val createdAt = jo.optString("created_at")
+			val chapterNumber = chap.toFloatOrNull() ?: 0f
 
-			// Handle group_name field (can be array or string)
+			// Only process English chapters
+			if (lang != "en") continue
+
+			// Extract team name
 			val groups = when {
 				jo.has("group_name") -> {
 					val groupField = jo.opt("group_name")
@@ -430,8 +431,92 @@ internal class ComickFunParser(context: MangaLoaderContext) :
 				else -> ""
 			}
 
+			// Track team stats
+			if (groups.isNotBlank()) {
+				teamStats[groups] = teamStats.getOrDefault(groups, 0) + 1
+			}
+
+			// Group by chapter number
+			chaptersByNumber.getOrPut(chapterNumber) { mutableListOf() }.add(jo)
+		}
+
+		// Find the most complete team (has most chapters)
+		val bestTeam = teamStats.maxByOrNull { it.value }?.key
+
+		// If no team data available, we'll rely on upvotes and upload dates for selection
+
+		// Second pass: create streamlined chapter list
+		val finalChapters = mutableListOf<MangaChapter>()
+
+		for (chapterNumber in chaptersByNumber.keys.sorted()) {
+			val availableVersions = chaptersByNumber[chapterNumber] ?: continue
+
+			// Pick best version for this chapter number
+			val bestVersion = availableVersions.maxWithOrNull(compareBy<JSONObject> { jo ->
+				val groups = when {
+					jo.has("group_name") -> {
+						val groupField = jo.opt("group_name")
+						when (groupField) {
+							is JSONArray -> groupField.asTypedList<String>().joinToString(", ")
+							is String -> groupField
+							else -> ""
+						}
+					}
+					else -> ""
+				}
+
+				// Priority scoring system for best chapter selection
+				var score = 0
+
+				// 1. Strongly prefer the most complete team (1000 points)
+				if (groups.isNotBlank() && groups == bestTeam) {
+					score += 1000
+				} else if (bestTeam.isNullOrBlank() && groups.isNotBlank()) {
+					// If no clear best team, give moderate boost to any team vs no team
+					score += 500
+				}
+
+				// 2. Community preference via upvotes (up to 100 points)
+				score += jo.optInt("up_count", 0) * 10
+
+				// 3. Slight preference for recent uploads (up to 10 points)
+				val createdAt = jo.optString("created_at")
+				if (createdAt.isNotBlank()) {
+					try {
+						val uploadTime = dateFormat.parseSafe(createdAt)
+						val currentTime = System.currentTimeMillis()
+						val daysSinceUpload = ((currentTime - uploadTime) / (24 * 60 * 60 * 1000)).toInt()
+						// More recent uploads get higher score (max 10 points for uploads within 10 days)
+						score += maxOf(0, 10 - daysSinceUpload.coerceAtMost(10))
+					} catch (e: Exception) {
+						// Ignore date parsing errors, no points added
+					}
+				}
+
+				score
+			}) ?: continue
+
+			val vol = bestVersion.optString("vol").takeIf { it.isNotBlank() && it != "null" }
+			val chap = bestVersion.optString("chap").takeIf { it.isNotBlank() } ?: "0"
+			val title = bestVersion.optString("title").takeIf { it.isNotBlank() }
+			val lang = bestVersion.optString("lang", "en")
+			val createdAt = bestVersion.optString("created_at")
+
+			// Handle group_name field (can be array or string)
+			val groups = when {
+				bestVersion.has("group_name") -> {
+					val groupField = bestVersion.opt("group_name")
+					when (groupField) {
+						is JSONArray -> groupField.asTypedList<String>().joinToString(", ")
+						is String -> groupField
+						else -> ""
+					}
+				}
+				else -> ""
+			}
+
 			val chapter = MangaChapter(
-				id = generateUid(jo.getString("hid")),
+				id = generateUid(bestVersion.getString("hid")),
 				title = buildString {
 					if (!vol.isNullOrBlank()) {
 						append("Vol. ", vol, " ")
@@ -441,30 +526,19 @@ internal class ComickFunParser(context: MangaLoaderContext) :
 						append(": ", title)
 					}
 				},
-				number = chap.toFloatOrNull() ?: index.toFloat(),
+				number = chapterNumber,
 				volume = vol?.toIntOrNull() ?: 0,
-				url = "/comic/$mangaSlug/${jo.getString("hid")}-chapter-$chap-$lang",
+				url = "/comic/$mangaSlug/${bestVersion.getString("hid")}-chapter-$chap-$lang",
 				scanlator = groups.takeIf { it.isNotBlank() },
 				uploadDate = dateFormat.parseSafe(createdAt),
-				branch = if (groups.isNotBlank()) groups else null,
+				branch = null, // Remove branch to avoid team selection UI
 				source = source,
 			)
 
-			val key = "${chap}_${lang}"
-			val existing = chapterMap[key]
-
-			// Pick the best chapter: prefer higher upvotes, then more recent upload, then consistent team selection
-			if (existing == null ||
-				upCount > existing.second ||
-				(upCount == existing.second && chapter.uploadDate > existing.first.uploadDate) ||
-				(upCount == existing.second && chapter.uploadDate == existing.first.uploadDate &&
-				 groups.contains("Bato") && !existing.first.scanlator.orEmpty().contains("Bato"))) {
-				chapterMap[key] = chapter to upCount
-			}
+			finalChapters.add(chapter)
 		}
 
-		// Return chapters in ascending order (oldest to newest)
-		return chapterMap.values.map { it.first }.sortedBy { it.number }
+		return finalChapters
 	}
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {

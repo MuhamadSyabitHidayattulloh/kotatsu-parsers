@@ -4,6 +4,7 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
+import org.koitharu.kotatsu.parsers.exception.AuthRequiredException
 import org.koitharu.kotatsu.parsers.exception.ParseException
 import org.koitharu.kotatsu.parsers.model.*
 import org.koitharu.kotatsu.parsers.network.CloudFlareHelper
@@ -16,6 +17,22 @@ internal class MangaLivre(context: MangaLoaderContext) :
     override val datePattern = "MMMM dd, yyyy"
     override val withoutAjax = true
     override val stylePage = ""
+
+    override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()
+        .apply {
+            // Add CloudFlare clearance cookies for cover images
+            val cookies = context.cookieJar.getCookies(domain)
+            val cookieString = cookies.filter { cookie ->
+                cookie.name == "cf_clearance" ||
+                cookie.name.startsWith("__cf") ||
+                cookie.name.startsWith("cf_")
+            }.joinToString("; ") { "${it.name}=${it.value}" }
+
+            if (cookieString.isNotEmpty()) {
+                add("Cookie", cookieString)
+            }
+        }
+        .build()
 
     private val captureAllPattern = Regex(".*")
 
@@ -451,5 +468,46 @@ internal class MangaLivre(context: MangaLoaderContext) :
                 ContentRating.SAFE
             }
         )
+    }
+
+    override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
+        // Set the manga reading pass cookie for chapter access
+        context.cookieJar.insertCookies(domain, "manga_reading_pass=verified")
+
+        // Get all cookies including CloudFlare and reading pass cookies
+        val cookies = context.cookieJar.getCookies(domain)
+        val cookieString = cookies.joinToString("; ") { "${it.name}=${it.value}" }
+
+        val headers = getRequestHeaders().newBuilder()
+            .apply {
+                if (cookieString.isNotEmpty()) {
+                    set("Cookie", cookieString)
+                }
+            }
+            .build()
+
+        val fullUrl = chapter.url.toAbsoluteUrl(domain)
+        val doc = webClient.httpGet(fullUrl, headers).parseHtml()
+
+        if (doc.selectFirst(selectRequiredLogin) != null) {
+            throw AuthRequiredException(source)
+        }
+
+        val root = doc.body().selectFirst(selectBodyPage) ?: throw ParseException(
+            "No image found, try to log in",
+            fullUrl,
+        )
+
+        return root.select(selectPage).flatMap { div ->
+            div.selectOrThrow("img").map { img ->
+                val url = img.requireSrc().toRelativeUrl(domain)
+                MangaPage(
+                    id = generateUid(url),
+                    url = url,
+                    preview = null,
+                    source = source,
+                )
+            }
+        }
     }
 }

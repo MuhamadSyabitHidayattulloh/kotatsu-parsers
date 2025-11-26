@@ -66,6 +66,12 @@ internal abstract class ComicasoParser(
 	}
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
+		// Latest Updates uses HTML parsing from homepage
+		if (order == SortOrder.UPDATED && filter.query.isNullOrEmpty() && filter.tags.isEmpty() && filter.states.isEmpty()) {
+			return getLatestUpdatesFromHtml(page)
+		}
+
+		// Popular and filtered results use JSON API
 		val url = buildString {
 			append("https://")
 			append(domain)
@@ -75,30 +81,22 @@ internal abstract class ComicasoParser(
 			append("&per_page=")
 			append(pageSize.toString())
 
-			when (order) {
-				SortOrder.POPULARITY -> {
-					// Popular endpoint doesn't have additional params
-				}
-				SortOrder.UPDATED -> {
-					// Default is latest updates
-				}
-				else -> {}
-			}
-
 			filter.query?.let {
 				append("&s=")
 				append(it.urlEncoded())
 			}
 
-			filter.tags.firstOrNull()?.let {
+			filter.tags.oneOrThrowIfMany()?.let {
 				append("&genre=")
 				append(it.key)
 			}
 
-			filter.states.firstOrNull()?.let {
-				when (it) {
-					MangaState.FINISHED -> append("&completed=1")
-					else -> {}
+			if (filter.states.isNotEmpty()) {
+				filter.states.oneOrThrowIfMany()?.let {
+					when (it) {
+						MangaState.FINISHED -> append("&completed=1")
+						else -> {}
+					}
 				}
 			}
 		}
@@ -106,6 +104,33 @@ internal abstract class ComicasoParser(
 		val json = webClient.httpGet(url).parseJson()
 		val items = json.getJSONArray("items")
 		return parseMangaList(items)
+	}
+
+	private suspend fun getLatestUpdatesFromHtml(page: Int): List<Manga> {
+		val url = "https://$domain/v2/?page=$page"
+		val doc = webClient.httpGet(url).parseHtml()
+
+		return doc.select("div.ng-list div.ng-list-item").map { item ->
+			val thumb = item.selectFirst("div.ng-list-thumb")
+			val link = thumb?.selectFirstOrThrow("a")?.attrAsRelativeUrl("href") ?: return@map null
+			val title = item.selectFirstOrThrow("div.ng-list-info a h3").text().trim()
+			val coverUrl = thumb.selectFirst("img")?.src()
+
+			Manga(
+				id = generateUid(link),
+				url = link,
+				title = title,
+				altTitles = emptySet(),
+				publicUrl = link.toAbsoluteUrl(domain),
+				rating = RATING_UNKNOWN,
+				contentRating = if (isNsfwSource) ContentRating.ADULT else null,
+				coverUrl = coverUrl ?: "",
+				tags = emptySet(),
+				state = null,
+				authors = emptySet(),
+				source = source,
+			)
+		}.filterNotNull()
 	}
 
 	private fun parseMangaList(json: JSONArray): List<Manga> {

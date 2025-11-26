@@ -229,7 +229,7 @@ internal abstract class ComicasoParser(
 				branch = null,
 				source = source,
 			)
-		}
+		}.reversed()
 
 		return manga.copy(
 			title = title,

@@ -393,27 +393,36 @@ internal class ComickFunParser(context: MangaLoaderContext) :
 
 		// Handle pagination if needed
 		var page = 2
-		var hasNextPage = response.optBoolean("hasNextPage", false)
-		while (hasNextPage) {
+		var hasNextPage = response.optJSONObject("pagination")?.optInt("last_page", 1)?.let { it > 1 } ?: false
+		while (hasNextPage && page <= 10) { // Limit to prevent infinite loops
 			response = webClient.httpGet("$url?page=$page").parseJson()
 			chapters.addAll(response.getJSONArray("data").asTypedList())
-			hasNextPage = response.optBoolean("hasNextPage", false)
+			val pagination = response.optJSONObject("pagination")
+			hasNextPage = pagination?.optInt("current_page", 1)?.let { current ->
+				current < pagination.optInt("last_page", 1)
+			} ?: false
 			page++
 		}
 
 		val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'", Locale.ENGLISH)
-		return chapters.mapChapters { _, jo ->
-			val vol = jo.optString("vol").takeIf { it.isNotBlank() }
+
+		// Process and deduplicate chapters - store chapter with metadata
+		val chapterMap = mutableMapOf<String, Pair<MangaChapter, Int>>() // Chapter with upvote count
+
+		for ((index, jo) in chapters.withIndex()) {
+			val vol = jo.optString("vol").takeIf { it.isNotBlank() && it != "null" }
 			val chap = jo.optString("chap").takeIf { it.isNotBlank() } ?: "0"
 			val title = jo.optString("title").takeIf { it.isNotBlank() }
 			val lang = jo.optString("lang", "en")
+			val upCount = jo.optInt("up_count", 0)
+			val createdAt = jo.optString("created_at")
 
 			// Handle group_name field (can be array or string)
 			val groups = when {
 				jo.has("group_name") -> {
 					val groupField = jo.opt("group_name")
 					when (groupField) {
-						is JSONArray -> groupField.asTypedList<String>().joinToString()
+						is JSONArray -> groupField.asTypedList<String>().joinToString(", ")
 						is String -> groupField
 						else -> ""
 					}
@@ -421,7 +430,7 @@ internal class ComickFunParser(context: MangaLoaderContext) :
 				else -> ""
 			}
 
-			MangaChapter(
+			val chapter = MangaChapter(
 				id = generateUid(jo.getString("hid")),
 				title = buildString {
 					if (!vol.isNullOrBlank()) {
@@ -432,15 +441,30 @@ internal class ComickFunParser(context: MangaLoaderContext) :
 						append(": ", title)
 					}
 				},
-				number = chap.toFloatOrNull() ?: 0f,
+				number = chap.toFloatOrNull() ?: index.toFloat(),
 				volume = vol?.toIntOrNull() ?: 0,
 				url = "/comic/$mangaSlug/${jo.getString("hid")}-chapter-$chap-$lang",
 				scanlator = groups.takeIf { it.isNotBlank() },
-				uploadDate = dateFormat.parseSafe(jo.optString("created_at")),
-				branch = null,
+				uploadDate = dateFormat.parseSafe(createdAt),
+				branch = if (groups.isNotBlank()) groups else null,
 				source = source,
 			)
+
+			val key = "${chap}_${lang}"
+			val existing = chapterMap[key]
+
+			// Pick the best chapter: prefer higher upvotes, then more recent upload, then consistent team selection
+			if (existing == null ||
+				upCount > existing.second ||
+				(upCount == existing.second && chapter.uploadDate > existing.first.uploadDate) ||
+				(upCount == existing.second && chapter.uploadDate == existing.first.uploadDate &&
+				 groups.contains("Bato") && !existing.first.scanlator.orEmpty().contains("Bato"))) {
+				chapterMap[key] = chapter to upCount
+			}
 		}
+
+		// Return chapters in ascending order (oldest to newest)
+		return chapterMap.values.map { it.first }.sortedBy { it.number }
 	}
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {

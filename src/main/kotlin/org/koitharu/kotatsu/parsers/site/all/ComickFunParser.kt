@@ -176,13 +176,25 @@ internal class ComickFunParser(context: MangaLoaderContext) :
 			throw IllegalArgumentException("ComicK API error: ${e.message}")
 		}
 
-		nextCursor = response.optString("cursor").takeIf { it.isNotEmpty() }
+		// Handle pagination - cursor might not always be present
+		nextCursor = response.optString("cursor").takeIf { it.isNotEmpty() && it != "null" }
 		val data = response.getJSONArray("data")
+		val mangaList = parseMangaList(data)
 
-		return parseMangaList(data)
+		// Additional check - if we got fewer results than expected, probably no more pages
+		if (mangaList.size < 10) {
+			nextCursor = null
+		}
+
+		return mangaList
 	}
 
 	private suspend fun getPopularMangaList(page: Int): List<Manga> {
+		// Limit pages to match original Tachiyomi logic (1-6)
+		if (page > 6) {
+			return emptyList()
+		}
+
 		val url = urlBuilder()
 			.scheme("https")
 			.host(domain)
@@ -224,7 +236,52 @@ internal class ComickFunParser(context: MangaLoaderContext) :
 
 		val response = webClient.httpGet(url.build()).parseJson()
 		val data = response.getJSONArray("data")
-		return parseMangaList(data)
+
+		// For latest chapters, we need to extract unique manga from chapter data
+		val mangaMap = mutableMapOf<String, Manga>()
+		val tagsMap = tagsArray.get()
+
+		for (i in 0 until data.length()) {
+			val jo = data.getJSONObject(i)
+			val slug = jo.getString("slug")
+
+			if (!mangaMap.containsKey(slug)) {
+				mangaMap[slug] = Manga(
+					id = generateUid(slug),
+					title = jo.getString("title"),
+					altTitles = emptySet(),
+					url = slug,
+					publicUrl = "https://$domain/comic/$slug",
+					rating = RATING_UNKNOWN,
+					contentRating = when (jo.optString("content_rating")) {
+						"safe" -> ContentRating.SAFE
+						"suggestive" -> ContentRating.SUGGESTIVE
+						"erotica" -> ContentRating.ADULT
+						else -> ContentRating.SAFE
+					},
+					coverUrl = jo.getStringOrNull("default_thumbnail"),
+					largeCoverUrl = null,
+					description = null,
+					tags = jo.selectGenres(tagsMap),
+					state = if (jo.optBoolean("is_ended", false)) {
+						MangaState.FINISHED
+					} else {
+						MangaState.ONGOING
+					},
+					authors = emptySet(),
+					source = source,
+				)
+			}
+		}
+
+		val result = mangaMap.values.toList()
+
+		// If we got very few unique manga, there might not be more pages
+		if (result.size < 10) {
+			return result
+		}
+
+		return result
 	}
 
 	private suspend fun parseMangaList(data: JSONArray): List<Manga> {
@@ -237,25 +294,23 @@ internal class ComickFunParser(context: MangaLoaderContext) :
 				altTitles = emptySet(),
 				url = slug,
 				publicUrl = "https://$domain/comic/$slug",
-				rating = jo.getDoubleOrDefault("rating", -1.0).toFloat().let { if (it < 0) RATING_UNKNOWN else it / 10f },
-				contentRating = when {
-					jo.getBooleanOrDefault("hentai", false) -> ContentRating.ADULT
-					jo.getBooleanOrDefault("suggestive", false) -> ContentRating.SUGGESTIVE
-					else -> ContentRating.SAFE
+				rating = RATING_UNKNOWN, // Rating not available in search results
+				contentRating = when (jo.optString("content_rating")) {
+					"safe" -> ContentRating.SAFE
+					"suggestive" -> ContentRating.SUGGESTIVE
+					"erotica" -> ContentRating.ADULT
+					else -> ContentRating.SAFE // Default to safe if empty or unknown
 				},
-				coverUrl = jo.getStringOrNull("cover_url"),
+				coverUrl = jo.getStringOrNull("default_thumbnail"),
 				largeCoverUrl = null,
-				description = jo.getStringOrNull("desc"),
+				description = null, // Description not available in search results
 				tags = jo.selectGenres(tagsMap),
-				state = when (jo.getIntOrDefault("status", 0)) {
-					1 -> MangaState.ONGOING
-					2 -> MangaState.FINISHED
-					3 -> MangaState.ABANDONED
-					4 -> MangaState.PAUSED
-					else -> null
+				state = if (jo.optBoolean("is_ended", false)) {
+					MangaState.FINISHED
+				} else {
+					MangaState.ONGOING
 				},
-				authors = jo.optJSONArray("authors")?.mapJSONNotNullToSet { it.optString("name") }
-					?: emptySet(),
+				authors = emptySet(), // Authors not available in search results
 				source = source,
 			)
 		}
@@ -349,10 +404,22 @@ internal class ComickFunParser(context: MangaLoaderContext) :
 		val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'", Locale.ENGLISH)
 		return chapters.mapChapters { _, jo ->
 			val vol = jo.optString("vol").takeIf { it.isNotBlank() }
-			val chap = jo.getString("chap")
+			val chap = jo.optString("chap").takeIf { it.isNotBlank() } ?: "0"
 			val title = jo.optString("title").takeIf { it.isNotBlank() }
-			val groups = jo.optJSONArray("groups")?.asTypedList<String>()?.joinToString()
-				?: ""
+			val lang = jo.optString("lang", "en")
+
+			// Handle group_name field (can be array or string)
+			val groups = when {
+				jo.has("group_name") -> {
+					val groupField = jo.opt("group_name")
+					when (groupField) {
+						is JSONArray -> groupField.asTypedList<String>().joinToString()
+						is String -> groupField
+						else -> ""
+					}
+				}
+				else -> ""
+			}
 
 			MangaChapter(
 				id = generateUid(jo.getString("hid")),
@@ -367,9 +434,9 @@ internal class ComickFunParser(context: MangaLoaderContext) :
 				},
 				number = chap.toFloatOrNull() ?: 0f,
 				volume = vol?.toIntOrNull() ?: 0,
-				url = "/comic/$mangaSlug/${jo.getString("hid")}-chapter-$chap-${jo.getString("lang")}",
+				url = "/comic/$mangaSlug/${jo.getString("hid")}-chapter-$chap-$lang",
 				scanlator = groups.takeIf { it.isNotBlank() },
-				uploadDate = dateFormat.parseSafe(jo.getString("created_at")),
+				uploadDate = dateFormat.parseSafe(jo.optString("created_at")),
 				branch = null,
 				source = source,
 			)
@@ -442,11 +509,34 @@ internal class ComickFunParser(context: MangaLoaderContext) :
 		val array = optJSONArray("genres") ?: return emptySet()
 		val res = ArraySet<MangaTag>(array.length())
 		for (i in 0 until array.length()) {
-			val id = array.getInt(i)
-			val tag = tags[id] ?: continue
-			res.add(tag)
+			// Handle both old format (int IDs) and new format (objects with slugs)
+			val element = array.opt(i)
+			val tag = when (element) {
+				is Int -> tags[element] // Old format: direct ID lookup
+				is JSONObject -> {
+					// New format: find by slug
+					val slug = element.optString("slug")
+					if (slug.isNotEmpty()) {
+						findTagBySlug(tags, slug)
+					} else {
+						null
+					}
+				}
+				else -> null
+			}
+			tag?.let { res.add(it) }
 		}
 		return res
+	}
+
+	private fun findTagBySlug(tags: SparseArrayCompat<MangaTag>, slug: String): MangaTag? {
+		for (i in 0 until tags.size()) {
+			val tag = tags.valueAt(i)
+			if (tag.key == slug) {
+				return tag
+			}
+		}
+		return null
 	}
 
 	private fun JSONArray.joinToString(separator: String): String {

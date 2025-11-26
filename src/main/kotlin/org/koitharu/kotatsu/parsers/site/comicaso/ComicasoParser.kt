@@ -86,15 +86,17 @@ internal abstract class ComicasoParser(
 				append(it.urlEncoded())
 			}
 
-			filter.tags.firstOrNull()?.let {
+			filter.tags.oneOrThrowIfMany()?.let {
 				append("&genre=")
 				append(it.key)
 			}
 
-			filter.states.firstOrNull()?.let {
-				when (it) {
-					MangaState.FINISHED -> append("&completed=1")
-					else -> {}
+			if (filter.states.isNotEmpty()) {
+				filter.states.oneOrThrowIfMany()?.let {
+					when (it) {
+						MangaState.FINISHED -> append("&completed=1")
+						else -> {}
+					}
 				}
 			}
 		}

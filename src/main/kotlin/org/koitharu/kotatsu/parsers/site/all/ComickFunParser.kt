@@ -19,12 +19,11 @@ import java.util.*
 
 private const val CHAPTERS_LIMIT = 99999
 
-@Broken("Original site closed")
 @MangaSourceParser("COMICK_FUN", "ComicK")
 internal class ComickFunParser(context: MangaLoaderContext) :
 	PagedMangaParser(context, MangaParserSource.COMICK_FUN, 20) {
 
-	override val configKeyDomain = ConfigKey.Domain("comick.io")
+	override val configKeyDomain = ConfigKey.Domain("comick.live")
 
 	override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
 		super.onCreateConfig(keys)

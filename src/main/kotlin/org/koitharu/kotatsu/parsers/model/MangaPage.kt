@@ -19,4 +19,8 @@ public data class MangaPage(
 	 */
 	@JvmField public val preview: String?,
 	@JvmField public val source: MangaSource,
+	/**
+	 * URL to fetch OCR/MTL text overlay data for this page, null if not supported
+	 */
+	@JvmField public val ocrUrl: String? = null,
 )

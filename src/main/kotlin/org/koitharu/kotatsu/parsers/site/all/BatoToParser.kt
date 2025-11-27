@@ -204,7 +204,14 @@ internal class BatoToParser(context: MangaLoaderContext) : PagedMangaParser(
 						}
 					}
 
-					append("&page=")
+					if (filter.minChapter != null || filter.maxChapter != null) {
+					append("&chapters=")
+					append(filter.minChapter ?: "")
+					append("-")
+					append(filter.maxChapter ?: "")
+				}
+
+				append("&page=")
 					append(page.toString())
 				}
 

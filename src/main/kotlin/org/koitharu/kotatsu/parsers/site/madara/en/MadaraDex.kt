@@ -102,15 +102,13 @@ internal class MadaraDex(context: MangaLoaderContext) :
     }
 
     private fun isCloudflareDocument(doc: Document): Boolean {
-        val html = doc.outerHtml()
-        if (html.length < 200) {
-            return true
-        }
-        val lower = html.lowercase(Locale.ROOT)
-        return lower.contains("cf-browser-verification") ||
-            lower.contains("turnstile") ||
-            lower.contains("checking your browser") ||
-            lower.contains("checking if the site connection is secure") ||
-            lower.contains("challenge-platform")
+        val title = (doc.title() ?: "").lowercase(Locale.ROOT)
+        val hasBlockedTitle = title.contains("access denied")
+
+        val hasActiveChallengeForm = doc.selectFirst("""form[action*="__cf_chl"]""") != null
+        val hasChallengeScript = doc.selectFirst("""script[src*="challenge-platform"]""") != null
+
+        // Only return blocked if we're absolutely certain
+        return hasBlockedTitle || hasActiveChallengeForm || hasChallengeScript
     }
 }

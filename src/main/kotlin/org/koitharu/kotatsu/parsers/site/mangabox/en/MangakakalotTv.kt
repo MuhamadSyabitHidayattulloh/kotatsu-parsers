@@ -24,8 +24,8 @@ internal class MangakakalotTv(context: MangaLoaderContext) :
 	MangaboxParser(context, MangaParserSource.MANGAKAKALOTTV) {
 
 	override val configKeyDomain = ConfigKey.Domain("www.mangakakalot.gg")
-	override val searchUrl = "/search/"
-	override val listUrl = "/manga_list"
+	override val searchUrl = "/search/story"
+	override val listUrl = "/manga_list/latest-manga"
 	override val availableSortOrders: Set<SortOrder> = EnumSet.of(
 		SortOrder.UPDATED,
 		SortOrder.POPULARITY,

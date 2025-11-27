@@ -15,7 +15,6 @@ import org.koitharu.kotatsu.parsers.util.*
 import org.koitharu.kotatsu.parsers.Broken
 import java.util.Locale
 
-@Broken
 @MangaSourceParser("MADARADEX", "MadaraDex", "en", ContentType.HENTAI)
 internal class MadaraDex(context: MangaLoaderContext) :
     MadaraParser(context, MangaParserSource.MADARADEX, "madaradex.org") {
@@ -31,6 +30,7 @@ internal class MadaraDex(context: MangaLoaderContext) :
 
     override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()
         .set("User-Agent", UserAgents.CHROME_DESKTOP)
+        .set("referer", "https://madaradex.org/")
         .build()
 
     override val authUrl: String

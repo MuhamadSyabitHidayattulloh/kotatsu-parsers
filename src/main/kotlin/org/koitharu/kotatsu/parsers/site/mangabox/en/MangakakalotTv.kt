@@ -2,7 +2,8 @@ package org.koitharu.kotatsu.parsers.site.mangabox.en
 
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import org.koitharu.kotatsu.parsers.Broken
+import okhttp3.Interceptor
+import okhttp3.Response
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
@@ -18,7 +19,6 @@ import org.koitharu.kotatsu.parsers.site.mangabox.MangaboxParser
 import org.koitharu.kotatsu.parsers.util.*
 import java.util.*
 
-@Broken("Connection refused")
 @MangaSourceParser("MANGAKAKALOTTV", "Mangakakalot.tv", "en")
 internal class MangakakalotTv(context: MangaLoaderContext) :
 	MangaboxParser(context, MangaParserSource.MANGAKAKALOTTV) {
@@ -31,6 +31,21 @@ internal class MangakakalotTv(context: MangaLoaderContext) :
 		SortOrder.POPULARITY,
 		SortOrder.NEWEST,
 	)
+
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val originalRequest = chain.request()
+
+        // Remove encoding headers from requests to avoid gzip compression issues
+        if (originalRequest.method == "GET" || originalRequest.method == "POST") {
+            val newRequest = originalRequest.newBuilder()
+                .removeHeader("Content-Encoding")
+                .removeHeader("Accept-Encoding")
+                .build()
+            return chain.proceed(newRequest)
+        }
+
+        return chain.proceed(originalRequest)
+    }
 
 	override val searchQueryCapabilities: MangaSearchQueryCapabilities
 		get() = MangaSearchQueryCapabilities(

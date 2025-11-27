@@ -8,6 +8,7 @@ import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.koitharu.kotatsu.parsers.site.mangabox.MangaboxParser
+import kotlin.collections.set
 
 
 @MangaSourceParser("HMANGABAT", "MangaBat", "en")
@@ -17,7 +18,7 @@ internal class Mangabat(context: MangaLoaderContext) :
 	override val selectTagMap = "div.panel-category p.pn-category-row:not(.pn-category-row-border) a"
 
     override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()
-        .add("referer", "https://www.mangabats.com/")
+        .set("Referer", "https://www.mangabats.com/")
         .build()
 
     override fun intercept(chain: Interceptor.Chain): Response {

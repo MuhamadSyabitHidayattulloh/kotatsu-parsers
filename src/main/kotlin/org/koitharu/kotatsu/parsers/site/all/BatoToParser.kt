@@ -65,6 +65,7 @@ internal class BatoToParser(context: MangaLoaderContext) : PagedMangaParser(
 			isTagsExclusionSupported = true,
 			isSearchSupported = true,
 			isOriginalLocaleSupported = true,
+			isChapterRangeSupported = true,
 		)
 
 	override suspend fun getFilterOptions() = MangaListFilterOptions(

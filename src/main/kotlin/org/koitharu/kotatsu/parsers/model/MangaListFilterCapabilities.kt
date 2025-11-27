@@ -53,4 +53,10 @@ public data class MangaListFilterCapabilities @InternalParsersApi constructor(
 	 * @see [MangaListFilter.author]
 	 */
 	val isAuthorSearchSupported: Boolean = false,
+
+	/**
+	 * Whether parser supports searching by chapter range
+	 * @see [MangaListFilter.minChapter] and [MangaListFilter.maxChapter]
+	 */
+	val isChapterRangeSupported: Boolean = false,
 )

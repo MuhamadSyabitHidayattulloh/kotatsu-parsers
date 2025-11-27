@@ -196,6 +196,7 @@ internal class Comix(context: MangaLoaderContext) :
             coverUrl = coverUrl,
             title = title,
             altTitles = emptySet(),
+            description = description,
             rating = if (rating > 0) (rating / 10.0f).toFloat() else RATING_UNKNOWN,
             tags = emptySet(),
             authors = emptySet(),

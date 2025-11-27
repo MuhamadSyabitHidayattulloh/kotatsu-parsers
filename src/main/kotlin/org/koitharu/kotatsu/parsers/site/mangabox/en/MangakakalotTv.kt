@@ -78,11 +78,11 @@ internal class MangakakalotTv(context: MangaLoaderContext) :
         } else {
             val tagCriterion = query.criteria.filterIsInstance<Include<*>>()
                 .firstOrNull { it.field == TAG }
-            
+
             val tagKey = (tagCriterion?.values?.firstOrNull() as? MangaTag)?.key
                 ?: (tagCriterion?.values?.firstOrNull() as? String)
 
-            val baseUrl = if (tagKey != null) "https://$domain/$tagKey" else "https://$domain/genre/all"
+            val baseUrl = tagKey ?: "https://$domain/genre/all"
 
             val sortParam = when (query.order ?: SortOrder.UPDATED) {
                 SortOrder.POPULARITY -> "topview"

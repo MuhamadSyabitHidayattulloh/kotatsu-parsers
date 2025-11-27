@@ -26,8 +26,11 @@ internal class MangakakalotTv(context: MangaLoaderContext) :
     MangaboxParser(context, MangaParserSource.MANGAKAKALOTTV) {
 
     override val configKeyDomain = ConfigKey.Domain("www.mangakakalot.gg")
-    override val searchUrl = "/search/story/"
-    override val listUrl = "/?&page=1&type=latest"
+
+    // We override getListPage, so these are not directly used for URL generation in the base class
+    override val searchUrl = ""
+    override val listUrl = ""
+
     override val availableSortOrders: Set<SortOrder> = EnumSet.of(
         SortOrder.UPDATED,
         SortOrder.POPULARITY,
@@ -36,7 +39,6 @@ internal class MangakakalotTv(context: MangaLoaderContext) :
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val originalRequest = chain.request()
-
         if (originalRequest.method == "GET" || originalRequest.method == "POST") {
             val newRequest = originalRequest.newBuilder()
                 .removeHeader("Content-Encoding")
@@ -44,7 +46,6 @@ internal class MangakakalotTv(context: MangaLoaderContext) :
                 .build()
             return chain.proceed(newRequest)
         }
-
         return chain.proceed(originalRequest)
     }
 
@@ -68,84 +69,58 @@ internal class MangakakalotTv(context: MangaLoaderContext) :
             ),
         )
 
-    private fun SearchableField.toParamName(): String = when (this) {
-        TAG -> "category"
-        STATE -> "state"
-        else -> ""
-    }
-
-    private fun Any?.toQueryParam(): String = when (this) {
-        is String -> urlEncoded()
-        is MangaTag -> key
-        is MangaState -> when (this) {
-            MangaState.ONGOING -> "ongoing"
-            MangaState.FINISHED -> "completed"
-            else -> "all"
-        }
-
-        is SortOrder -> when (this) {
-            SortOrder.POPULARITY -> "topview"
-            SortOrder.UPDATED -> "latest"
-            SortOrder.NEWEST -> "newest"
-            else -> ""
-        }
-
-        else -> this.toString().urlEncoded()
-    }
-
-    private fun StringBuilder.appendCriterion(field: SearchableField, value: Any?, paramName: String? = null) {
-        val param = paramName ?: field.toParamName()
-        if (param.isNotBlank()) {
-            append("&$param=")
-            append(value.toQueryParam())
-        }
-    }
-
     override suspend fun getListPage(query: MangaSearchQuery, page: Int): List<Manga> {
-        var titleSearchUrl: String? = null
-        val url = buildString {
-            val pageQueryParameter = "page=$page"
-            append("https://$domain/?")
+        val titleQuery = query.criteria.filterIsInstance<Match<*>>()
+            .firstOrNull { it.field == TITLE_NAME }?.value as? String
 
-            query.criteria.forEach { criterion ->
-                when (criterion) {
-                    is Include<*> -> {
-                        criterion.field.toParamName().takeIf { it.isNotBlank() }?.let { param ->
-                            append("&$param=${criterion.values.first().toQueryParam()}")
-                        }
-                    }
+        val url = if (!titleQuery.isNullOrBlank()) {
+            "https://$domain/search/story/${titleQuery.urlEncoded()}?page=$page"
+        } else {
+            val tagKey = query.criteria.filterIsInstance<Include<*>>()
+                .firstOrNull { it.field == TAG }?.values?.firstOrNull() as? String
 
-                    is Match<*> -> {
-                        if (criterion.field == TITLE_NAME) {
-                            criterion.value.toQueryParam().takeIf { it.isNotBlank() }?.let { titleName ->
-                                titleSearchUrl = "https://${domain}${searchUrl}${titleName}/" +
-                                    "?$pageQueryParameter"
-                            }
-                        }
-                        appendCriterion(criterion.field, criterion.value)
-                    }
+            val baseUrl = if (tagKey != null) "https://$domain/$tagKey" else "https://$domain/genre/all"
 
-                    else -> {
-                    }
-                }
+            val sortParam = when (query.order ?: SortOrder.UPDATED) {
+                SortOrder.POPULARITY -> "topview"
+                SortOrder.NEWEST -> "newest"
+                else -> "latest"
             }
 
-            append("&$pageQueryParameter")
-            append("&type=${(query.order ?: defaultSortOrder).toQueryParam()}")
+            val stateParam = query.criteria.filterIsInstance<Include<*>>()
+                .firstOrNull { it.field == STATE }?.values?.firstOrNull()?.let {
+                    when (it) {
+                        MangaState.ONGOING -> "ongoing"
+                        MangaState.FINISHED -> "completed"
+                        else -> "all"
+                    }
+                } ?: "all"
+
+            "$baseUrl?type=$sortParam&state=$stateParam&page=$page"
         }
 
-        val doc = webClient.httpGet(titleSearchUrl ?: url).parseHtml()
+        val doc = webClient.httpGet(url).parseHtml()
 
-        return doc.select("div.list-comic-item-wrap").ifEmpty {
-            doc.select("div.story_item")
-        }.map { div ->
-            val href = div.selectFirstOrThrow("a").attrAsRelativeUrl("href")
+        var elements = doc.select("div.list-comic-item-wrap")
+        if (elements.isEmpty()) {
+            elements = doc.select("div.itemupdate")
+        }
+        if (elements.isEmpty()) {
+            elements = doc.select("div.story_item")
+        }
+
+        return elements.map { div ->
+            val coverLink = div.selectFirst("a.cover") ?: div.selectFirst("a")
+            val href = coverLink?.attrAsRelativeUrl("href") ?: ""
+            val img = coverLink?.selectFirst("img")
+            val title = div.selectFirst("h3")?.text() ?: ""
+
             Manga(
                 id = generateUid(href),
                 url = href,
-                publicUrl = href.toAbsoluteUrl(div.host ?: domain),
-                coverUrl = div.selectFirst("img")?.src(),
-                title = div.selectFirstOrThrow("h3").text(),
+                publicUrl = href.toAbsoluteUrl(domain),
+                coverUrl = img?.attr("data-src")?.takeIf { it.isNotEmpty() } ?: img?.attr("src"),
+                title = title,
                 altTitles = emptySet(),
                 rating = RATING_UNKNOWN,
                 tags = emptySet(),
@@ -176,10 +151,11 @@ internal class MangakakalotTv(context: MangaLoaderContext) :
         }
         val alt = doc.body().select(selectAlt).text().replace("Alternative : ", "").nullIfEmpty()
         val author = doc.body().select(selectAut).eachText().joinToString().nullIfEmpty()
+
         manga.copy(
-            tags = doc.body().select(selectTag).mapToSet { a ->
+            tags = doc.select(selectTag).mapToSet { a ->
                 MangaTag(
-                    key = a.attr("href").substringAfterLast("category=").substringBefore("&"),
+                    key = a.attrAsRelativeUrl("href").removePrefix("/"),
                     title = a.text().toTitleCase(),
                     source = source,
                 )
@@ -224,19 +200,20 @@ internal class MangakakalotTv(context: MangaLoaderContext) :
                 branch = null,
                 source = source
             )
-        }
+        }.reversed()
     }
 
-    override val selectTagMap = "ul.tag li a"
-
     override suspend fun fetchAvailableTags(): Set<MangaTag> {
-        val doc = webClient.httpGet("https://$domain/$listUrl").parseHtml()
-        return doc.select(selectTagMap).mapToSet { a ->
-            MangaTag(
-                key = a.attr("href").substringAfterLast("category=").substringBefore("&"),
-                title = a.attr("title"),
-                source = source,
-            )
-        }
+        val doc = webClient.httpGet("https://$domain/genre/all").parseHtml()
+        return doc.select("ul.tag.tag-name li a").mapNotNull { a ->
+            val href = a.attrAsRelativeUrl("href")
+            if (href.startsWith("genre/") && !href.contains("/all")) {
+                MangaTag(
+                    key = href.removePrefix("/"),
+                    title = a.text(),
+                    source = source,
+                )
+            } else null
+        }.toSet()
     }
 }

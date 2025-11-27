@@ -16,6 +16,8 @@ public data class MangaListFilter(
 	@JvmField val yearFrom: Int = YEAR_UNKNOWN,
 	@JvmField val yearTo: Int = YEAR_UNKNOWN,
 	@JvmField val author: String? = null,
+	@JvmField val minChapter: String? = null,
+	@JvmField val maxChapter: String? = null,
 ) {
 
 	private fun isNonSearchOptionsEmpty(): Boolean = tags.isEmpty() &&
@@ -29,7 +31,9 @@ public data class MangaListFilter(
 		yearTo == YEAR_UNKNOWN &&
 		types.isEmpty() &&
 		demographics.isEmpty() &&
-		author.isNullOrEmpty()
+		author.isNullOrEmpty() &&
+		minChapter.isNullOrEmpty() &&
+		maxChapter.isNullOrEmpty()
 
 	public fun isEmpty(): Boolean = isNonSearchOptionsEmpty() && query.isNullOrEmpty()
 
@@ -56,6 +60,9 @@ public data class MangaListFilter(
 		private var year: Int = YEAR_UNKNOWN
 		private var yearFrom: Int = YEAR_UNKNOWN
 		private var yearTo: Int = YEAR_UNKNOWN
+		private var author: String? = null
+		private var minChapter: String? = null
+		private var maxChapter: String? = null
 
 		fun query(query: String?): Builder = apply { this.query = query }
 		fun addTag(tag: MangaTag): Builder = apply { tags.add(tag) }
@@ -79,10 +86,14 @@ public data class MangaListFilter(
 		fun year(year: Int): Builder = apply { this.year = year }
 		fun yearFrom(year: Int): Builder = apply { this.yearFrom = year }
 		fun yearTo(year: Int): Builder = apply { this.yearTo = year }
+		fun author(author: String?): Builder = apply { this.author = author }
+		fun minChapter(minChapter: String?): Builder = apply { this.minChapter = minChapter }
+		fun maxChapter(maxChapter: String?): Builder = apply { this.maxChapter = maxChapter }
 
 		fun build(): MangaListFilter = MangaListFilter(
 			query, tags, tagsExclude, locale, originalLocale, states,
 			contentRating, types, demographics, year, yearFrom, yearTo,
+			author, minChapter, maxChapter,
 		)
 	}
 }

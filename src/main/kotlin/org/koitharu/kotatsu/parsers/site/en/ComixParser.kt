@@ -227,6 +227,8 @@ internal class Comix(context: MangaLoaderContext) :
         )
     }
 
+    override suspend fun getRelatedManga(seed: Manga): List<Manga> = emptyList()
+
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
         val chapterId = chapter.url.substringAfterLast("/").substringBefore("-")
         val chapterUrl = "https://comix.to${chapter.url}"

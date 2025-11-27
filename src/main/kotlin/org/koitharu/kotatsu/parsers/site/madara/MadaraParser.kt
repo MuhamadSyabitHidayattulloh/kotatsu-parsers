@@ -609,7 +609,7 @@ internal abstract class MadaraParser(
 
 
 	protected open val selectDate = "span.chapter-release-date i"
-	protected open val selectChapter = "li.wp-manga-chapter"
+    protected open val selectChapter = "li.wp-manga-chapter, div.wp-manga-chapter"
 
 	protected open suspend fun getChapters(manga: Manga, doc: Document): List<MangaChapter> {
 		val dateFormat = SimpleDateFormat(datePattern, sourceLocale)

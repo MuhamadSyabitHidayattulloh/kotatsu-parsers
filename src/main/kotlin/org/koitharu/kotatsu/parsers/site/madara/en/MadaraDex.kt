@@ -12,7 +12,6 @@ import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.koitharu.kotatsu.parsers.network.UserAgents
 import org.koitharu.kotatsu.parsers.site.madara.MadaraParser
 import org.koitharu.kotatsu.parsers.util.*
-import org.koitharu.kotatsu.parsers.Broken
 import java.util.Locale
 
 @MangaSourceParser("MADARADEX", "MadaraDex", "en", ContentType.HENTAI)
@@ -50,20 +49,28 @@ internal class MadaraDex(context: MangaLoaderContext) :
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
         val fullUrl = chapter.url.toAbsoluteUrl(domain)
         val doc = loadChapterDocument(fullUrl)
-        val root = doc.body().selectFirst(selectBodyPage)
-            ?: throw ParseException("No image found, try to log in", fullUrl)
 
-        return root.select(selectPage).flatMap { div ->
-            div.selectOrThrow("img").map { img ->
-                val rawUrl = img.requireSrc().toRelativeUrl(domain)
-                val cleanUrl = rawUrl.substringBefore('#')
-                MangaPage(
-                    id = generateUid(cleanUrl),
-                    url = cleanUrl,
-                    preview = null,
-                    source = source,
-                )
+        val images = doc.select("div.page-break img")
+
+        if (images.isEmpty()) {
+            throw ParseException("No images found, try to log in", fullUrl)
+        }
+
+        return images.mapNotNull { img ->
+            val rawUrl = img.attr("data-src").ifBlank { img.attr("src") }.trim()
+
+            if (rawUrl.isEmpty()) {
+                return@mapNotNull null
             }
+
+            val cleanUrl = rawUrl.toRelativeUrl(domain).substringBefore('#')
+
+            MangaPage(
+                id = generateUid(cleanUrl),
+                url = cleanUrl,
+                preview = null,
+                source = source,
+            )
         }
     }
 

@@ -80,7 +80,7 @@ internal abstract class MangaWorldParser(
 
 				filter.tags.forEach {
 					append("&genre=")
-					append(it.key)
+					append(it.key.urlEncoded())
 				}
 
 				when (order) {
@@ -143,7 +143,15 @@ internal abstract class MangaWorldParser(
 		return doc.select(".comics-grid .entry").map { div ->
 			val href = div.selectFirstOrThrow("a.thumb").attrAsRelativeUrl("href")
 			val tags = div.select(".genres a[href*=/archive?genre=]")
-				.mapToSet { MangaTag(it.ownText().toTitleCase(sourceLocale), it.attr("href"), source) }
+				.mapToSet {
+					val href = it.attr("href")
+					val genreKey = href.substringAfter("genre=").substringBefore("&")
+					MangaTag(
+						key = genreKey,
+						title = it.ownText().toTitleCase(sourceLocale),
+						source = source
+					)
+				}
 			val author = div.selectFirst(".author a")?.text()
 			Manga(
 				id = generateUid(href),

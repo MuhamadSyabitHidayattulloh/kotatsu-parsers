@@ -17,6 +17,9 @@ internal class Mangabat(context: MangaLoaderContext) :
 	override val configKeyDomain = ConfigKey.Domain("mangabats.com")
 	override val selectTagMap = "div.panel-category p.pn-category-row:not(.pn-category-row-border) a"
 
+	// Ensure pagination URLs are correctly formatted for mangabats.com
+	override val listUrl = "/manga-list.html"
+
     override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()
         .set("Referer", "https://www.mangabats.com/")
         .build()

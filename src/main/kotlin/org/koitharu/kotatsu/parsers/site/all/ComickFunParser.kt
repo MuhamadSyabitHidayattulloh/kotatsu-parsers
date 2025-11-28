@@ -88,7 +88,11 @@ internal class ComickFunParser(context: MangaLoaderContext) :
 			return getLatestMangaList(page)
 		}
 
-		// Use search API for filtered results or specific sorts
+		// Use JavaScript evaluation for search and filtered results to bypass blocking
+		return getSearchWithEvaluateJs(page, order, filter)
+	}
+
+	private suspend fun getSearchWithEvaluateJs(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
 		if (page == 1) {
 			nextCursor = null
 		}
@@ -170,8 +174,39 @@ internal class ComickFunParser(context: MangaLoaderContext) :
 				}
 			}
 
+		val script = """
+			(() => {
+				return fetch('${url.build()}', {
+					method: 'GET',
+					headers: {
+						'Accept': 'application/json',
+						'User-Agent': '${context.userAgent}',
+						'Referer': 'https://${domain}/'
+					}
+				}).then(response => response.text())
+					.then(text => {
+						try {
+							return JSON.parse(text);
+						} catch (e) {
+							return null;
+						}
+					});
+			})();
+		""".trimIndent()
+
+		val rawResponse = context.evaluateJs(url.build().toString(), script, 30000L)
+			?: throw IllegalArgumentException("Failed to load search results")
+
+		val responseText = if (rawResponse.startsWith("\"") && rawResponse.endsWith("\"")) {
+			rawResponse.substring(1, rawResponse.length - 1)
+				.replace("\\\"", "\"")
+				.replace("\\n", "\n")
+				.replace("\\r", "\r")
+				.replace("\\t", "\t")
+		} else rawResponse
+
 		val response = try {
-			webClient.httpGet(url.build()).parseJson()
+			org.json.JSONObject(responseText)
 		} catch (e: Exception) {
 			throw IllegalArgumentException("ComicK API error: ${e.message}")
 		}
@@ -188,6 +223,8 @@ internal class ComickFunParser(context: MangaLoaderContext) :
 
 		return mangaList
 	}
+
+	override suspend fun getRelatedManga(seed: Manga): List<Manga> = emptyList()
 
 	private suspend fun getPopularMangaList(page: Int): List<Manga> {
 		// Limit pages to match original Tachiyomi logic (1-6)
@@ -387,17 +424,92 @@ internal class ComickFunParser(context: MangaLoaderContext) :
 	}
 
 	private suspend fun getChapters(mangaSlug: String): List<MangaChapter> {
+		// Use JavaScript evaluation to bypass API blocking
 		val url = "https://$domain/api/comics/$mangaSlug/chapter-list"
-		var response = webClient.httpGet(url).parseJson()
+
+		val script = """
+			(() => {
+				return fetch('$url', {
+					method: 'GET',
+					headers: {
+						'Accept': 'application/json',
+						'User-Agent': '${context.userAgent}',
+						'Referer': 'https://${domain}/'
+					}
+				}).then(response => response.text())
+					.then(text => {
+						try {
+							return JSON.parse(text);
+						} catch (e) {
+							return null;
+						}
+					});
+			})();
+		""".trimIndent()
+
+		val rawResponse = context.evaluateJs(url, script, 30000L)
+			?: return emptyList() // If failed, return empty instead of crashing
+
+		val responseText = if (rawResponse.startsWith("\"") && rawResponse.endsWith("\"")) {
+			rawResponse.substring(1, rawResponse.length - 1)
+				.replace("\\\"", "\"")
+				.replace("\\n", "\n")
+				.replace("\\r", "\r")
+				.replace("\\t", "\t")
+		} else rawResponse
+
+		val response = try {
+			org.json.JSONObject(responseText)
+		} catch (e: Exception) {
+			return emptyList() // If parsing fails, return empty instead of crashing
+		}
+
 		val chapters = response.getJSONArray("data").asTypedList<JSONObject>().toMutableList()
 
-		// Handle pagination if needed
+		// Handle pagination if needed (but limit to reduce API load)
 		var page = 2
 		var hasNextPage = response.optJSONObject("pagination")?.optInt("last_page", 1)?.let { it > 1 } ?: false
-		while (hasNextPage && page <= 10) { // Limit to prevent infinite loops
-			response = webClient.httpGet("$url?page=$page").parseJson()
-			chapters.addAll(response.getJSONArray("data").asTypedList())
-			val pagination = response.optJSONObject("pagination")
+		while (hasNextPage && page <= 5) { // Reduced from 10 to 5 to limit API calls
+			val pageUrl = "$url?page=$page"
+			val pageScript = """
+				(() => {
+					return fetch('$pageUrl', {
+						method: 'GET',
+						headers: {
+							'Accept': 'application/json',
+							'User-Agent': '${context.userAgent}',
+							'Referer': 'https://${domain}/'
+						}
+					}).then(response => response.text())
+						.then(text => {
+							try {
+								return JSON.parse(text);
+							} catch (e) {
+								return null;
+							}
+						});
+				})();
+			""".trimIndent()
+
+			val pageRawResponse = context.evaluateJs(pageUrl, pageScript, 30000L)
+				?: break // If failed, stop pagination
+
+			val pageResponseText = if (pageRawResponse.startsWith("\"") && pageRawResponse.endsWith("\"")) {
+				pageRawResponse.substring(1, pageRawResponse.length - 1)
+					.replace("\\\"", "\"")
+					.replace("\\n", "\n")
+					.replace("\\r", "\r")
+					.replace("\\t", "\t")
+			} else pageRawResponse
+
+			val pageResponse = try {
+				org.json.JSONObject(pageResponseText)
+			} catch (e: Exception) {
+				break // If parsing fails, stop pagination
+			}
+
+			chapters.addAll(pageResponse.getJSONArray("data").asTypedList())
+			val pagination = pageResponse.optJSONObject("pagination")
 			hasNextPage = pagination?.optInt("current_page", 1)?.let { current ->
 				current < pagination.optInt("last_page", 1)
 			} ?: false

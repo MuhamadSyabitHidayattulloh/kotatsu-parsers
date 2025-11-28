@@ -58,11 +58,8 @@ internal abstract class MangaWorldParser(
 
 	override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
 
-		if (order == SortOrder.UPDATED) {
-			if (filter.query != null || filter.tags.isNotEmpty() || filter.states.isNotEmpty() || filter.types.isNotEmpty() || filter.year != 0) {
-				throw IllegalArgumentException("Sorting by update with filters is not supported by this source.")
-
-			}
+		// Handle UPDATED sort without filters - use homepage
+		if (order == SortOrder.UPDATED && filter.query == null && filter.tags.isEmpty() && filter.states.isEmpty() && filter.types.isEmpty() && filter.year == 0) {
 			return parseMangaList(webClient.httpGet("https://$domain/?page=$page").parseHtml())
 		}
 

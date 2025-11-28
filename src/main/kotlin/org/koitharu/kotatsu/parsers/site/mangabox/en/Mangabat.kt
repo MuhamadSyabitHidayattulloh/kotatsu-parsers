@@ -27,7 +27,7 @@ internal class Mangabat(context: MangaLoaderContext) :
 	override val configKeyDomain = ConfigKey.Domain("mangabats.com")
 
 	// Use custom implementation instead of base class URL handling
-	override val listUrl = "/manga-list.html"
+	override val listUrl = "/genre/all"
 	override val searchUrl = "/search/story"
 
 	override val availableSortOrders: Set<SortOrder> = EnumSet.of(
@@ -139,16 +139,17 @@ internal class Mangabat(context: MangaLoaderContext) :
 	}
 
 	override suspend fun fetchAvailableTags(): Set<MangaTag> {
-		val doc = webClient.httpGet("https://$domain").parseHtml()
-		return doc.select("div.panel-category p.pn-category-row:not(.pn-category-row-border) a").mapToSet { a ->
-			val href = a.attr("href")
-			val key = href.substringAfterLast('/').substringBefore('?')
-			MangaTag(
-				key = key,
-				title = a.text(),
-				source = source,
-			)
-		}
+		val doc = webClient.httpGet("https://$domain/genre/all").parseHtml()
+		return doc.select("ul.tag.tag-name li a").mapNotNull { a ->
+			val href = a.attrAsRelativeUrl("href")
+			if (href.startsWith("genre/") && !href.contains("/all")) {
+				MangaTag(
+					key = href.removePrefix("/"),
+					title = a.text(),
+					source = source,
+				)
+			} else null
+		}.toSet()
 	}
 
     override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()

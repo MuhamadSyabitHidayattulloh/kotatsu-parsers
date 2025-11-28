@@ -217,12 +217,12 @@ internal class ComickFunParser(context: MangaLoaderContext) :
                 const comicCards = document.querySelectorAll('[class*="comic"], [class*="manga"], .search-result-item');
 
 
-				const hasBlockedTitle = title.includes('access denied');
-				const hasFake404 = title.includes('404 not found') && bodyText.includes('the site is closed');
-				const hasActiveChallengeForm = document.querySelector('form[action*="__cf_chl"]') !== null;
-				const hasChallengeScript = document.querySelector('script[src*="challenge-platform"]') !== null;
+				const hasBlockedTitle = title.includes('access denied') || title.includes('just a moment');
+				const hasCloudflareChallenge = document.querySelector('div.cf-wrapper') !== null ||
+					document.querySelector('div[class*="cf-"]') !== null ||
+					document.querySelector('script[src*="challenge-platform"]') !== null;
 
-				if (hasBlockedTitle || hasFake404 || hasActiveChallengeForm || hasChallengeScript) {
+				if (hasBlockedTitle || hasCloudflareChallenge) {
 					return "CLOUDFLARE_BLOCKED";
 				}
 

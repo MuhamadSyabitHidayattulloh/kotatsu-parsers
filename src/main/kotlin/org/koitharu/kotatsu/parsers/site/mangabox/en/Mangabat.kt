@@ -56,45 +56,40 @@ internal class Mangabat(context: MangaLoaderContext) :
 			),
 		)
 
-	override suspend fun getListPage(query: MangaSearchQuery, page: Int): List<Manga> {
-		val titleQuery = query.criteria.filterIsInstance<Match<*>>()
-			.firstOrNull { it.field == TITLE_NAME }?.value as? String
+    override suspend fun getListPage(query: MangaSearchQuery, page: Int): List<Manga> {
+        val titleQuery = query.criteria.filterIsInstance<Match<*>>()
+            .firstOrNull { it.field == TITLE_NAME }?.value as? String
 
-		val url = if (!titleQuery.isNullOrBlank()) {
-			// Handle title search using search URL
-			"https://$domain${searchUrl}/${titleQuery.replace(" ", "_").urlEncoded()}?page=$page"
-		} else {
-			// Handle genre/tag filtering or general listing
-			val tagCriterion = query.criteria.filterIsInstance<Include<*>>()
-				.firstOrNull { it.field == TAG }
+        val url = if (!titleQuery.isNullOrBlank()) {
+            "https://$domain/search/story/${titleQuery.urlEncoded()}?page=$page"
+        } else {
+            val tagCriterion = query.criteria.filterIsInstance<Include<*>>()
+                .firstOrNull { it.field == TAG }
 
-			val baseUrl = if (tagCriterion != null) {
-				val tagKey = (tagCriterion.values.firstOrNull() as? MangaTag)?.key
-					?: (tagCriterion.values.firstOrNull() as? String)
-				"https://$domain/genre/$tagKey"
-			} else {
-				"https://$domain$listUrl"
-			}
+            val tagKey = (tagCriterion?.values?.firstOrNull() as? MangaTag)?.key
+                ?: (tagCriterion?.values?.firstOrNull() as? String)
 
-			val sortParam = when (query.order ?: SortOrder.UPDATED) {
-				SortOrder.POPULARITY -> "topview"
-				SortOrder.NEWEST -> "newest"
-				else -> "latest"
-			}
+            val baseUrl = tagKey ?: "https://$domain/genre/all"
 
-			val stateParam = query.criteria.filterIsInstance<Include<*>>()
-				.firstOrNull { it.field == STATE }?.values?.firstOrNull()?.let {
-					when (it) {
-						MangaState.ONGOING -> "ongoing"
-						MangaState.FINISHED -> "completed"
-						else -> "all"
-					}
-				} ?: "all"
+            val sortParam = when (query.order ?: SortOrder.UPDATED) {
+                SortOrder.POPULARITY -> "topview"
+                SortOrder.NEWEST -> "newest"
+                else -> "latest"
+            }
 
-			"$baseUrl?type=$sortParam&state=$stateParam&page=$page"
-		}
+            val stateParam = query.criteria.filterIsInstance<Include<*>>()
+                .firstOrNull { it.field == STATE }?.values?.firstOrNull()?.let {
+                    when (it) {
+                        MangaState.ONGOING -> "ongoing"
+                        MangaState.FINISHED -> "completed"
+                        else -> "all"
+                    }
+                } ?: "all"
 
-		val doc = webClient.httpGet(url).parseHtml()
+            "$baseUrl?type=$sortParam&state=$stateParam&page=$page"
+        }
+
+        val doc = webClient.httpGet(url).parseHtml()
 
 		// Try different selectors similar to MangaKakalot
 		var elements = doc.select("div.list-comic-item-wrap")
@@ -139,17 +134,23 @@ internal class Mangabat(context: MangaLoaderContext) :
 	}
 
 	override suspend fun fetchAvailableTags(): Set<MangaTag> {
-		val doc = webClient.httpGet("https://$domain/genre/all").parseHtml()
-		return doc.select("ul.tag.tag-name li a").mapNotNull { a ->
-			val href = a.attrAsRelativeUrl("href")
-			if (href.startsWith("genre/") && !href.contains("/all")) {
-				MangaTag(
-					key = href.removePrefix("/"),
-					title = a.text(),
-					source = source,
+		val doc = webClient.httpGet("https://$domain").parseHtml()
+		val tags = doc.select("td a[href*='/genre/']").drop(1)
+		val uniqueTags = mutableSetOf<MangaTag>()
+		for (a in tags) {
+			val key = a.attr("href").substringAfter("/genre/").substringBefore("?")
+			val name = a.text().replaceFirstChar { it.uppercaseChar() }
+			if (uniqueTags.none { it.key == key }) {
+				uniqueTags.add(
+					MangaTag(
+						key = key,
+						title = name,
+						source = source,
+					)
 				)
-			} else null
-		}.toSet()
+			}
+		}
+		return uniqueTags
 	}
 
     override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()

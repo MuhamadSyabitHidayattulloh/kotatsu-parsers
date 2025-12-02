@@ -472,7 +472,7 @@ internal class MangaLivre(context: MangaLoaderContext) :
 
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
         // Set the manga reading pass cookie for chapter access
-        context.cookieJar.insertCookies(domain, "manga_reading_pass=verified")
+        context.cookieJar.insertCookies(domain, "manga_reading_ml=verified")
 
         // Get all cookies including CloudFlare and reading pass cookies
         val cookies = context.cookieJar.getCookies(domain)

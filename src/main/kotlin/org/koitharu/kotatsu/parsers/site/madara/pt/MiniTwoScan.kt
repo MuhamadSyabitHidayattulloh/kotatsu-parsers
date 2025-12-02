@@ -69,7 +69,7 @@ internal class MiniTwoScan(context: MangaLoaderContext) :
                 scanlator = null,
                 branch = null,
             )
-        }.reversed() // Newest chapters first
+        }
     }
 
 }

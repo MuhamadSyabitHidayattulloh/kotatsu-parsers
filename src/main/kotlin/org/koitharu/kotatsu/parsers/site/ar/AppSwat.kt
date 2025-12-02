@@ -21,7 +21,6 @@ internal class MangaSwat(context: MangaLoaderContext) :
     override val filterCapabilities: MangaListFilterCapabilities
         get() = MangaListFilterCapabilities(
             isSearchSupported = true,
-            isSearchWithFiltersSupported = true,
             isMultipleTagsSupported = true,
             isTagsExclusionSupported = false,
         )
@@ -54,7 +53,13 @@ internal class MangaSwat(context: MangaLoaderContext) :
 
     override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {
         val url = buildString {
-            append("https://appswat.com/v2/api/v2/series/?type=131&page=$page")
+            append("https://appswat.com/v2/api/v2/series/?page_size=20")
+
+            // Add page offset
+            if (page > 1) {
+                val offset = (page - 1) * 20
+                append("&offset=$offset")
+            }
 
             // Add search query
             if (!filter.query.isNullOrEmpty()) {
@@ -145,7 +150,7 @@ internal class MangaSwat(context: MangaLoaderContext) :
         val chaptersDeferred = async { getChapters(seriesId) }
 
         // Get detailed manga info from the same API endpoint
-        val detailUrl = "https://appswat.com/v2/api/v2/series/?type=131&page=1"
+        val detailUrl = "https://appswat.com/v2/api/v2/series/?page_size=100"
         val response = webClient.httpGet(detailUrl).parseJson()
         val results = response.getJSONArray("results")
 

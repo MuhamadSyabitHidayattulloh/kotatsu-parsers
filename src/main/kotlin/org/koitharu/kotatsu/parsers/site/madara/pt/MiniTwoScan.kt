@@ -8,7 +8,5 @@ import org.koitharu.kotatsu.parsers.site.madara.MadaraParser
 @MangaSourceParser("MINITWOSCAN", "MiniTwoScan", "pt")
 internal class MiniTwoScan(context: MangaLoaderContext) :
     MadaraParser(context, MangaParserSource.MINITWOSCAN, "minitwoscan.com") {
-
-    // Force direct chapter loading (no ajax)
-    override val selectTestAsync = "li.wp-manga-chapter, div.wp-manga-chapter"
+    override val withoutAjax = true
 }

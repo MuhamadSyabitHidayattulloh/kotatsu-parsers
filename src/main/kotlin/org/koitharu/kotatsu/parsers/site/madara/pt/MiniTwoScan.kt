@@ -57,7 +57,8 @@ internal class MiniTwoScan(context: MangaLoaderContext) :
 
         // Generate all chapters from 1 to maxChapter
         return (1..maxChapter.toInt()).map { chapterNum ->
-            val chapterUrl = "$baseUrl$chapterNum/"
+            val chapterNumFormatted = if (chapterNum < 10) "%02d".format(chapterNum) else chapterNum.toString()
+            val chapterUrl = "$baseUrl$chapterNumFormatted/"
             MangaChapter(
                 id = generateUid(chapterUrl),
                 title = "Capítulo $chapterNum",

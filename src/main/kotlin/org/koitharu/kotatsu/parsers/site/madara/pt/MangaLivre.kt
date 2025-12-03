@@ -197,41 +197,76 @@ internal class MangaLivre(context: MangaLoaderContext) :
 
     // Override fetchAvailableTags to also use webview
     override suspend fun fetchAvailableTags(): Set<MangaTag> {
-        println("DEBUG: MangaLivre.fetchAvailableTags called")
-        val url = "https://$domain/$listUrl"
-        println("DEBUG: Loading tags URL via captureWebViewUrls: $url")
-        val doc = captureDocument(url, buildPathPattern(listUrl))
-
-        val body = doc.body()
-        val root1 = body.selectFirst("header")?.selectFirst("ul.second-menu")
-        val root2 = body.selectFirst("div.genres_wrap")?.selectFirst("ul.list-unstyled")
-        if (root1 == null && root2 == null) {
-            val title = doc.title()
-            val bodySnippet = body.outerHtml().take(800)
-            throw ParseException(
-                "Could not find tag containers in MangaLivre page. " +
-                    "Page title: '$title'. " +
-                    "Expected 'header ul.second-menu' or 'div.genres_wrap ul.list-unstyled'. " +
-                    "Body HTML snippet: '$bodySnippet'",
-                url
-            )
-        }
-        val list = root1?.select("li").orEmpty() + root2?.select("li").orEmpty()
-        val keySet = HashSet<String>(list.size)
-        return list.mapNotNullToSet { li ->
-            val a = li.selectFirst("a") ?: return@mapNotNullToSet null
-            val href = a.attr("href").removeSuffix('/').substringAfterLast(tagPrefix, "")
-            if (href.isEmpty() || !keySet.add(href)) {
-                return@mapNotNullToSet null
-            }
-            MangaTag(
-                key = href,
-                title = a.ownText().ifEmpty {
-                    a.selectFirst(".menu-image-title")?.textOrNull()
-                }?.toTitleCase(sourceLocale) ?: return@mapNotNullToSet null,
-                source = source,
-            )
-        }
+        return setOf(
+            MangaTag("artes-marciais", "Artes Marciais", source),
+            MangaTag("aventura", "Aventura", source),
+            MangaTag("boys-love", "Boy's Love", source),
+            MangaTag("comedia", "Comédia", source),
+            MangaTag("crime", "Crime", source),
+            MangaTag("crossdressing", "Crossdressing", source),
+            MangaTag("culinaria", "Culinária", source),
+            MangaTag("delinquentes", "Delinquentes", source),
+            MangaTag("demonios", "Demônios", source),
+            MangaTag("drama", "Drama", source),
+            MangaTag("ecchi", "Ecchi", source),
+            MangaTag("escolar", "Escolar", source),
+            MangaTag("escritorio", "Escritório", source),
+            MangaTag("esporte", "Esporte", source),
+            MangaTag("fantasia", "Fantasia", source),
+            MangaTag("fantasma", "Fantasma", source),
+            MangaTag("ficcao", "Ficção", source),
+            MangaTag("ficcao-cientifica", "Ficção Científica", source),
+            MangaTag("filosofico", "Filosófico", source),
+            MangaTag("gender-bender", "Gender Bender", source),
+            MangaTag("gore", "Gore", source),
+            MangaTag("gyaru", "Gyaru", source),
+            MangaTag("harem", "Harém", source),
+            MangaTag("historico", "Histórico", source),
+            MangaTag("horror", "Horror", source),
+            MangaTag("isekai", "Isekai", source),
+            MangaTag("josei", "Josei", source),
+            MangaTag("loli", "Loli", source),
+            MangaTag("maduro", "Maduro", source),
+            MangaTag("mafia", "Máfia", source),
+            MangaTag("magia", "Magia", source),
+            MangaTag("mecha", "Mecha", source),
+            MangaTag("medico", "Médico", source),
+            MangaTag("militar", "Militar", source),
+            MangaTag("misterio", "Mistério", source),
+            MangaTag("mitologia", "Mitologia", source),
+            MangaTag("monster-girl", "Monster Girl", source),
+            MangaTag("monstros", "Monstros", source),
+            MangaTag("musica", "Música", source),
+            MangaTag("ninja", "Ninja", source),
+            MangaTag("policia", "Polícia", source),
+            MangaTag("pos-apocaliptico", "Pós-Apocalíptico", source),
+            MangaTag("psicologico", "Psicológico", source),
+            MangaTag("reencarnacao", "Reencarnação", source),
+            MangaTag("romance", "Romance", source),
+            MangaTag("samurai", "Samurai", source),
+            MangaTag("seinen", "Seinen", source),
+            MangaTag("shotacon", "Shotacon", source),
+            MangaTag("shoujo", "Shoujo", source),
+            MangaTag("shoujo-ai", "Shoujo Ai", source),
+            MangaTag("shounen", "Shounen", source),
+            MangaTag("shounen-ai", "Shounen Ai", source),
+            MangaTag("slice-of-life", "Slice of Life", source),
+            MangaTag("smut", "Smut", source),
+            MangaTag("sobrenatural", "Sobrenatural", source),
+            MangaTag("sobrevivencia", "Sobrevivência", source),
+            MangaTag("super-heroi", "Super-Herói", source),
+            MangaTag("suspense", "Suspense", source),
+            MangaTag("terror", "Terror", source),
+            MangaTag("tragedia", "Tragédia", source),
+            MangaTag("vampiros", "Vampiros", source),
+            MangaTag("viagem-no-tempo", "Viagem no Tempo", source),
+            MangaTag("video-games", "Video Games", source),
+            MangaTag("vila", "Vilã", source),
+            MangaTag("wuxia", "Wuxia", source),
+            MangaTag("yaoi", "Yaoi", source),
+            MangaTag("yuri", "Yuri", source),
+            MangaTag("zumbi", "Zumbi", source),
+        )
     }
 
     override suspend fun getListPage(page: Int, order: SortOrder, filter: MangaListFilter): List<Manga> {

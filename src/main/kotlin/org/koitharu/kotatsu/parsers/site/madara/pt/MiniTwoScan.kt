@@ -14,7 +14,7 @@ internal class MiniTwoScan(context: MangaLoaderContext) :
 
     override val withoutAjax = true
 
-    // Use correct selectors for MiniTwoScan's chapter structure
+    // MiniTwoScan uses a custom chapter list structure
     override val selectTestAsync = "div.list-chapter div.chapter-item"
     override val selectChapter = "div.list-chapter div.chapter-item"
 
@@ -24,53 +24,42 @@ internal class MiniTwoScan(context: MangaLoaderContext) :
             return emptyList()
         }
 
-        // Parse existing chapters to find the highest number and URL pattern
-        var maxChapter = 0f
-        var baseUrl = ""
-        var mangaSlug = ""
-        val dateFormat = SimpleDateFormat(datePattern, sourceLocale)
-
-        for (element in existingChapters) {
-            val linkElement = element.selectFirst("span.chapter a") ?: continue
-            val href = linkElement.attr("href")
-            val title = linkElement.text().trim()
-
-            // Extract chapter number from title like "Capítulo 141"
-            val chapterNumber = title.replace("Capítulo", "").trim().toFloatOrNull()
-            if (chapterNumber != null && chapterNumber > maxChapter) {
-                maxChapter = chapterNumber
-
-                // Extract base URL and manga slug from href
-                // URL pattern: https://minitwoscan.com/manga/manga-name/capitulo-141/
-                val urlParts = href.split("/")
-                val chapterIndex = urlParts.indexOfLast { it.startsWith("capitulo-") }
-                if (chapterIndex > 0) {
-                    baseUrl = urlParts.take(chapterIndex).joinToString("/") + "/capitulo-"
-                    mangaSlug = urlParts[chapterIndex - 1]
-                }
-            }
-        }
-
-        if (maxChapter == 0f || baseUrl.isEmpty()) {
+        // Extract manga slug from current manga URL: /manga/{slug}
+        val mangaSlug = manga.url.removeSuffix("/").substringAfterLast("/")
+        if (mangaSlug.isEmpty()) {
             return emptyList()
         }
 
-        // Generate all chapters from 1 to maxChapter
+        // Find max chapter number from the visible list
+        var maxChapter = 0f
+        for (element in existingChapters) {
+            val linkElement = element.selectFirst("span.chapter a") ?: continue
+            val title = linkElement.text().trim()
+            val chapterNumber = title.replace("Capítulo", "").trim().toFloatOrNull()
+            if (chapterNumber != null && chapterNumber > maxChapter) {
+                maxChapter = chapterNumber
+            }
+        }
+        if (maxChapter == 0f) {
+            return emptyList()
+        }
+
+        // Generate normalized chapter URLs per manga slug:
+        // /manga/{slug}/capitulo-{NN}/
         return (1..maxChapter.toInt()).map { chapterNum ->
             val chapterNumFormatted = if (chapterNum < 10) "%02d".format(chapterNum) else chapterNum.toString()
-            val chapterUrl = "$baseUrl$chapterNumFormatted/"
+            val chapterUrl = "/manga/$mangaSlug/capitulo-$chapterNumFormatted/"
             MangaChapter(
                 id = generateUid(chapterUrl),
                 title = "Capítulo $chapterNum",
                 number = chapterNum.toFloat(),
                 volume = 0,
                 url = chapterUrl.toRelativeUrl(domain),
-                uploadDate = 0L, // No date available for generated chapters
+                uploadDate = 0L,
                 source = source,
                 scanlator = null,
                 branch = null,
             )
         }
     }
-
 }

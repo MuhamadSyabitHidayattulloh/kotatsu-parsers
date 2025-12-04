@@ -187,24 +187,10 @@ internal abstract class NineMangaParser(
         val doc = followJavaScriptRedirect(response, headers)
 
         // Try to extract images from JavaScript first (for redirected pages)
-        val scriptContent = doc.select("script[type*=javascript]").firstOrNull { script ->
-            script.html().contains("all_imgs_url")
-        }?.html()
-
-        if (scriptContent != null) {
-            val imageUrlsRegex = """all_imgs_url:\s*\[(.*?)\]""".toRegex(RegexOption.DOT_MATCHES_ALL)
-            val match = imageUrlsRegex.find(scriptContent)
-            if (match != null) {
-                val imageUrlsContent = match.groupValues[1]
-                val imageUrls = """"([^"]+)"""".toRegex().findAll(imageUrlsContent)
-                    .map { it.groupValues[1] }
-                    .toList()
-
-                if (imageUrls.isNotEmpty()) {
-                    return imageUrls.mapIndexed { index, imageUrl ->
-                        MangaPage(generateUid("$imageUrl-$index"), imageUrl, null, source)
-                    }
-                }
+        val jsImageUrls = extractImagesFromJavaScript(doc)
+        if (jsImageUrls != null) {
+            return jsImageUrls.mapIndexed { index, imageUrl ->
+                MangaPage(generateUid("$imageUrl-$index"), imageUrl, null, source)
             }
         }
 
@@ -250,12 +236,22 @@ internal abstract class NineMangaParser(
                 }
             }
 
-            // Get ALL images from this page
-            val images = pageDoc.select("img.manga_pic")
-            for (img in images) {
-                val imgUrl = img.attrAsAbsoluteUrl("src")
-                if (imgUrl.isNotEmpty() && !allPages.any { it.url == imgUrl }) {
-                    allPages.add(MangaPage(generateUid(imgUrl), imgUrl, null, source))
+            // Try JavaScript extraction first, then fallback to regular image extraction
+            val jsImageUrls = extractImagesFromJavaScript(pageDoc)
+            if (jsImageUrls != null) {
+                jsImageUrls.forEach { imageUrl ->
+                    if (!allPages.any { it.url == imageUrl }) {
+                        allPages.add(MangaPage(generateUid(imageUrl), imageUrl, null, source))
+                    }
+                }
+            } else {
+                // Fallback to regular image extraction
+                val images = pageDoc.select("img.manga_pic")
+                for (img in images) {
+                    val imgUrl = img.attrAsAbsoluteUrl("src")
+                    if (imgUrl.isNotEmpty() && !allPages.any { it.url == imgUrl }) {
+                        allPages.add(MangaPage(generateUid(imgUrl), imgUrl, null, source))
+                    }
                 }
             }
         }
@@ -280,12 +276,23 @@ internal abstract class NineMangaParser(
                         try {
                             val pageResponse = webClient.httpGet(fullPageUrl, headers)
                             val pageDoc = followJavaScriptRedirect(pageResponse, headers)
-                            val images = pageDoc.select("img.manga_pic")
 
-                            for (img in images) {
-                                val imgUrl = img.attrAsAbsoluteUrl("src")
-                                if (imgUrl.isNotEmpty() && !fallbackPages.any { it.url == imgUrl }) {
-                                    fallbackPages.add(MangaPage(generateUid(imgUrl), imgUrl, null, source))
+                            // Try JavaScript extraction first
+                            val jsImageUrls = extractImagesFromJavaScript(pageDoc)
+                            if (jsImageUrls != null) {
+                                jsImageUrls.forEach { imageUrl ->
+                                    if (!fallbackPages.any { it.url == imageUrl }) {
+                                        fallbackPages.add(MangaPage(generateUid(imageUrl), imageUrl, null, source))
+                                    }
+                                }
+                            } else {
+                                // Fallback to regular image extraction
+                                val images = pageDoc.select("img.manga_pic")
+                                for (img in images) {
+                                    val imgUrl = img.attrAsAbsoluteUrl("src")
+                                    if (imgUrl.isNotEmpty() && !fallbackPages.any { it.url == imgUrl }) {
+                                        fallbackPages.add(MangaPage(generateUid(imgUrl), imgUrl, null, source))
+                                    }
                                 }
                             }
                         } catch (e: Exception) {
@@ -315,6 +322,7 @@ internal abstract class NineMangaParser(
         if (urlWithoutQuery.endsWith(".jpg", true) || urlWithoutQuery.endsWith(".png", true) || urlWithoutQuery.endsWith(".jpeg", true) || urlWithoutQuery.endsWith(".webp", true)) {
             return page.url
         }
+
         // Import cookies from domain and use HTTP request instead of captureDocument
         val url = page.url.toAbsoluteUrl(domain)
         val cookies = context.cookieJar.getCookies(domain)
@@ -335,43 +343,54 @@ internal abstract class NineMangaParser(
             ?: root.selectFirstOrThrow("a.pic_download").attrAsAbsoluteUrl("href")
     }
 
-    private var tagCache: ArrayMap<String, MangaTag>? = null
-    private val mutex = Mutex()
-
     private suspend fun followJavaScriptRedirect(response: okhttp3.Response, headers: okhttp3.Headers): Document {
         var doc = response.parseHtml()
 
-        // Check if we've been redirected to a different domain
+        // Check if we've been redirected to a source selection page
         val responseUrl = response.request.url.host
         if (!responseUrl.contains("ninemanga", ignoreCase = true)) {
-            // Check for JavaScript redirect
-            val jsRedirectScript = doc.select("script").firstOrNull { script ->
-                script.html().contains("window.location.href")
-            }
+            // Look for source selection buttons
+            val sourceLink = doc.selectFirst("a.vision-button[href*=esninemanga], a.cool-blue[href*=esninemanga]")?.attr("href")
+            if (sourceLink != null) {
+                // Clean up the URL (remove &amp; and replace with &)
+                val cleanUrl = sourceLink.replace("&amp;", "&")
 
-            if (jsRedirectScript != null) {
-                val redirectRegex = """window\.location\.href\s*=\s*["']([^"']+)["']""".toRegex()
-                val match = redirectRegex.find(jsRedirectScript.html())
-                if (match != null) {
-                    val redirectPath = match.groupValues[1]
-                    val redirectUrl = if (redirectPath.startsWith("http")) {
-                        redirectPath
-                    } else {
-                        "${response.request.url.scheme}://${response.request.url.host}$redirectPath"
-                    }
-
-                    // Follow the JavaScript redirect with proper referer
-                    val redirectHeaders = headers.newBuilder()
-                        .set("Referer", response.request.url.toString())
-                        .build()
-                    val redirectedResponse = webClient.httpGet(redirectUrl, redirectHeaders)
-                    doc = redirectedResponse.parseHtml()
-                }
+                // Follow the source redirect
+                val sourceResponse = webClient.httpGet(cleanUrl, headers)
+                doc = sourceResponse.parseHtml()
+            } else {
+                throw ParseException("Redirected to wrong domain: $responseUrl", response.request.url.toString())
             }
         }
 
         return doc
     }
+
+    private fun extractImagesFromJavaScript(doc: Document): List<String>? {
+        // Try to extract images from JavaScript array
+        val scriptContent = doc.select("script[type*=javascript]").firstOrNull { script ->
+            script.html().contains("all_imgs_url")
+        }?.html()
+
+        if (scriptContent != null) {
+            val imageUrlsRegex = """all_imgs_url:\s*\[(.*?)\]""".toRegex(RegexOption.DOT_MATCHES_ALL)
+            val match = imageUrlsRegex.find(scriptContent)
+            if (match != null) {
+                val imageUrlsContent = match.groupValues[1]
+                val imageUrls = """"([^"]+)"""".toRegex().findAll(imageUrlsContent)
+                    .map { it.groupValues[1] }
+                    .toList()
+
+                if (imageUrls.isNotEmpty()) {
+                    return imageUrls
+                }
+            }
+        }
+        return null
+    }
+
+    private var tagCache: ArrayMap<String, MangaTag>? = null
+    private val mutex = Mutex()
 
     private suspend fun getOrCreateTagMap(): Map<String, MangaTag> = mutex.withLock {
         tagCache?.let { return@withLock it }

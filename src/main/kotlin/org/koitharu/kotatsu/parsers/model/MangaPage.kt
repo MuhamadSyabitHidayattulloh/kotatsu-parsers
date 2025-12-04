@@ -19,4 +19,8 @@ public data class MangaPage(
 	 */
 	@JvmField public val preview: String?,
 	@JvmField public val source: MangaSource,
+	/**
+	 * List of text overlays for this page, null if not supported by source
+	 */
+	@JvmField public val texts: List<MangaPageText>? = null,
 )

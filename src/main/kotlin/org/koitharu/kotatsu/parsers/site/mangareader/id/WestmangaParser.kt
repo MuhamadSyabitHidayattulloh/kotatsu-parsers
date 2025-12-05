@@ -2,7 +2,6 @@ package org.koitharu.kotatsu.parsers.site.mangareader.id
 
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import org.json.JSONObject
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.config.ConfigKey
@@ -87,9 +86,7 @@ internal class WestmangaParser(context: MangaLoaderContext) :
 			}
 		}.build()
 
-		val response = webClient.httpGet(url, createApiHeaders(url)).parseJson()
-		val data = response.getJSONObject("data")
-		val mangaArray = data.getJSONArray("data")
+		val mangaArray = webClient.httpGet(url, createApiHeaders(url)).parseJsonArray()
 
 		return mangaArray.mapJSON { jo ->
 			val slug = jo.getString("slug")
@@ -114,11 +111,10 @@ internal class WestmangaParser(context: MangaLoaderContext) :
 		val slug = manga.url.removeSurrounding("/manga/", "/")
 		val url = "https://$apiDomain/api/comic/$slug".toHttpUrl()
 
-		val response = webClient.httpGet(url, createApiHeaders(url)).parseJson()
-		val data = response.getJSONObject("data")
+		val data = webClient.httpGet(url, createApiHeaders(url)).parseJson()
 
 		val tags = buildSet {
-			when (data.getString("country")) {
+			when (data.getStringOrNull("country_id") ?: data.getStringOrNull("country")) {
 				"JP" -> add(MangaTag("Manga", "manga", source))
 				"CN" -> add(MangaTag("Manhua", "manhua", source))
 				"KR" -> add(MangaTag("Manhwa", "manhwa", source))
@@ -126,14 +122,15 @@ internal class WestmangaParser(context: MangaLoaderContext) :
 			if (data.optBoolean("color", false)) {
 				add(MangaTag("Colored", "colored", source))
 			}
-			val genres = data.getJSONArray("genres")
-			for (i in 0 until genres.length()) {
-				val genre = genres.getJSONObject(i)
-				add(MangaTag(
-					title = genre.getString("name"),
-					key = genre.getString("slug"),
-					source = source,
-				))
+			data.optJSONArray("genres")?.let { genres ->
+				for (i in 0 until genres.length()) {
+					val genre = genres.getJSONObject(i)
+					add(MangaTag(
+						title = genre.getString("name"),
+						key = genre.getStringOrNull("slug") ?: genre.getString("name"),
+						source = source,
+					))
+				}
 			}
 		}
 
@@ -154,8 +151,10 @@ internal class WestmangaParser(context: MangaLoaderContext) :
 			else -> null
 		}
 
-		val chapters = data.getJSONArray("chapters").mapJSON { chapterObj ->
+		val chapters = data.optJSONArray("chapters")?.mapJSON { chapterObj ->
 			val chapterSlug = chapterObj.getString("slug")
+			val updatedAt = chapterObj.optJSONObject("updated_at")?.getLongOrDefault("time", 0L)
+				?: chapterObj.getLongOrDefault("updated_at", 0L)
 			MangaChapter(
 				id = generateUid(chapterSlug),
 				url = "/$chapterSlug/",
@@ -163,11 +162,11 @@ internal class WestmangaParser(context: MangaLoaderContext) :
 				number = chapterObj.getString("number").toFloatOrNull() ?: 0f,
 				volume = 0,
 				branch = null,
-				uploadDate = chapterObj.getLongOrDefault("updated_at", 0L) * 1000,
+				uploadDate = updatedAt * 1000,
 				scanlator = null,
 				source = source,
 			)
-		}
+		} ?: emptyList()
 
 		return manga.copy(
 			title = data.getString("title"),
@@ -185,8 +184,8 @@ internal class WestmangaParser(context: MangaLoaderContext) :
 		val url = "https://$apiDomain/api/v/$slug".toHttpUrl()
 
 		val response = webClient.httpGet(url, createApiHeaders(url)).parseJson()
-		val data = response.getJSONObject("data")
-		val images = data.getJSONArray("images")
+		val images = response.optJSONObject("data")?.getJSONArray("images")
+			?: response.getJSONArray("images")
 
 		return images.mapJSONIndexed { index, _ ->
 			MangaPage(

@@ -1,6 +1,5 @@
 package org.koitharu.kotatsu.parsers.site.madara.all
 
-import org.json.JSONArray
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.bitmap.Rect
@@ -10,6 +9,7 @@ import org.koitharu.kotatsu.parsers.model.MangaPageText
 import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.koitharu.kotatsu.parsers.site.madara.MadaraParser
 import org.koitharu.kotatsu.parsers.util.*
+import org.koitharu.kotatsu.parsers.util.json.*
 import java.util.*
 
 @MangaSourceParser("MANHUARM", "Manhuarm", "")
@@ -18,31 +18,51 @@ internal class Manhuarm(context: MangaLoaderContext) :
 	override val sourceLocale: Locale = Locale.ENGLISH
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-		val fullUrl = chapter.url.toAbsoluteUrl(domain)
-		val doc = webClient.httpGet(fullUrl).parseHtml()
 		val pages = super.getPages(chapter)
+		val doc = webClient.httpGet(chapter.url.toAbsoluteUrl(domain)).parseHtml()
 		val chapterId = doc.selectFirst("#wp-manga-current-chap")?.attr("data-id") ?: return pages
-		
-		return try {
-			val jsonArray = JSONArray(webClient.httpGet("https://$domain/wp-content/uploads/ocr-data/$chapterId.json").parseJson())
-			pages.mapIndexed { index, page ->
-				if (index >= jsonArray.length()) return@mapIndexed page
-				val texts = jsonArray.getJSONObject(index).optJSONArray("texts")?.let { arr ->
-					(0 until arr.length()).mapNotNull { i ->
-						val obj = arr.getJSONObject(i)
-						val text = obj.getString("text").trim()
-						if (text.isEmpty()) return@mapNotNull null
-						val box = obj.getJSONArray("box")
-						MangaPageText(
-							Rect(box.getInt(0), box.getInt(1), box.getInt(0) + box.getInt(2), box.getInt(1) + box.getInt(3)),
-							text
-						)
-					}.ifEmpty { null }
-				}
-				page.copy(texts = texts)
-			}
+
+		val ocrData = try {
+			webClient.httpGet("https://$domain/wp-content/uploads/ocr-data/$chapterId.json")
+				.body.string().toJSONArrayOrNull()
 		} catch (e: Exception) {
-			pages
+			null
+		} ?: return pages
+
+		val textMap = ocrData.mapJSON { pageData ->
+			val imageUrl = pageData.getString("image")
+			val texts = pageData.getJSONArray("texts").mapJSON { dialogue ->
+				val box = dialogue.getJSONArray("box")
+				MangaPageText(
+					rect = Rect(
+						left = box.getInt(0),
+						top = box.getInt(1),
+						right = box.getInt(0) + box.getInt(2),
+						bottom = box.getInt(1) + box.getInt(3),
+					),
+					text = dialogue.getString("text"),
+				)
+			}
+			imageUrl to texts
+		}.toMap()
+
+		return pages.map { page ->
+			val imageFileName = page.url.substringAfterLast('/')
+			val texts = textMap.entries.firstOrNull { (key, _) ->
+				key.contains(imageFileName, ignoreCase = true)
+			}?.value
+
+			if (!texts.isNullOrEmpty()) {
+				MangaPage(
+					id = page.id,
+					url = page.url,
+					preview = page.preview,
+					source = page.source,
+					texts = texts,
+				)
+			} else {
+				page
+			}
 		}
 	}
 }

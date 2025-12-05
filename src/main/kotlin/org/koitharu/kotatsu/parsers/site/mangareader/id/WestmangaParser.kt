@@ -138,11 +138,9 @@ internal class WestmangaParser(context: MangaLoaderContext) :
 			data.optJSONArray("genres")?.let { genres ->
 				for (i in 0 until genres.length()) {
 					val genre = genres.getJSONObject(i)
-					val name = genre.getString("name")
-					val slug = genre.getStringOrNull("slug")?.takeIf { it.isNotEmpty() } ?: name
 					add(MangaTag(
-						title = name,
-						key = slug,
+						title = genre.getString("name"),
+						key = genre.getInt("id").toString(),
 						source = source,
 					))
 				}

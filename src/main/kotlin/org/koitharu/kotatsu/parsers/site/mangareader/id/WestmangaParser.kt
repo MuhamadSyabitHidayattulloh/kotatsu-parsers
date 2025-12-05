@@ -179,7 +179,7 @@ internal class WestmangaParser(context: MangaLoaderContext) :
 			authors = setOfNotNull(data.getStringOrNull("author")),
 			description = description.takeIf { it.isNotEmpty() },
 			state = state,
-			chapters = chapters,
+			chapters = chapters.reversed(),
 		)
 	}
 
@@ -191,14 +191,19 @@ internal class WestmangaParser(context: MangaLoaderContext) :
 		val images = response.optJSONObject("data")?.getJSONArray("images")
 			?: response.getJSONArray("images")
 
-		return images.mapJSONIndexed { index, _ ->
-			MangaPage(
-				id = generateUid(images.getString(index)),
-				url = images.getString(index),
-				preview = null,
-				source = source,
+		val pages = ArrayList<MangaPage>(images.length())
+		for (i in 0 until images.length()) {
+			val imageUrl = images.getString(i)
+			pages.add(
+				MangaPage(
+					id = generateUid(imageUrl),
+					url = imageUrl,
+					preview = null,
+					source = source,
+				)
 			)
 		}
+		return pages
 	}
 
 	private fun createApiHeaders(url: okhttp3.HttpUrl): Headers {

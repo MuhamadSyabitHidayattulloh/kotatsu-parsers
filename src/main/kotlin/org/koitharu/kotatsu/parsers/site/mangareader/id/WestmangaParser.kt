@@ -86,7 +86,8 @@ internal class WestmangaParser(context: MangaLoaderContext) :
 			}
 		}.build()
 
-		val mangaArray = webClient.httpGet(url, createApiHeaders(url)).parseJsonArray()
+		val response = webClient.httpGet(url, createApiHeaders(url)).parseJson()
+		val mangaArray = response.getJSONArray("data")
 
 		return mangaArray.mapJSON { jo ->
 			val slug = jo.getString("slug")

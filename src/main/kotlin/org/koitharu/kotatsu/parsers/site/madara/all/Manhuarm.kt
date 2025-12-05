@@ -3,6 +3,7 @@ package org.koitharu.kotatsu.parsers.site.madara.all
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
 import org.koitharu.kotatsu.parsers.bitmap.Rect
+import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.model.MangaChapter
 import org.koitharu.kotatsu.parsers.model.MangaPage
 import org.koitharu.kotatsu.parsers.model.MangaPageText
@@ -12,12 +13,87 @@ import org.koitharu.kotatsu.parsers.util.parseHtml
 import org.koitharu.kotatsu.parsers.util.toAbsoluteUrl
 import org.koitharu.kotatsu.parsers.util.json.mapJSON
 import org.koitharu.kotatsu.parsers.util.json.toJSONArrayOrNull
+import org.koitharu.kotatsu.parsers.util.urlEncoded
+import java.net.URLEncoder
 import java.util.Locale
 
 @MangaSourceParser("MANHUARM", "Manhuarm", "")
 internal class Manhuarm(context: MangaLoaderContext) :
 	MadaraParser(context, MangaParserSource.MANHUARM, "manhuarmmtl.com") {
 	override val sourceLocale: Locale = Locale.ENGLISH
+
+	private val translatorModelKey = ConfigKey.TranslatorModel(
+		presetValues = mapOf(
+			"google" to "Google Translate",
+			"bing" to "Bing Translator",
+		),
+		defaultValue = "google",
+	)
+
+	private val translatorLanguageKey = ConfigKey.TranslatorLanguage(
+		presetValues = mapOf(
+			"en" to "English",
+			"id" to "Indonesian",
+			"es" to "Spanish",
+			"fr" to "French",
+			"de" to "German",
+			"ja" to "Japanese",
+			"ko" to "Korean",
+			"pt" to "Portuguese",
+			"ru" to "Russian",
+			"th" to "Thai",
+			"vi" to "Vietnamese",
+			"zh-CN" to "Chinese (Simplified)",
+			"zh-TW" to "Chinese (Traditional)",
+		),
+		defaultValue = "en",
+	)
+
+	private val textOverlayFontSizeKey = ConfigKey.TextOverlayFontSize(
+		defaultValue = 32,
+	)
+
+	override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
+		super.onCreateConfig(keys)
+		keys.add(translatorModelKey)
+		keys.add(translatorLanguageKey)
+		keys.add(textOverlayFontSizeKey)
+	}
+
+	private suspend fun translateText(text: String): String {
+		if (text.isBlank()) return text
+
+		val targetLang = config[translatorLanguageKey]
+		if (targetLang == "en") return text
+
+		val model = config[translatorModelKey]
+
+		return try {
+			when (model) {
+				"google" -> translateWithGoogle(text, targetLang)
+				"bing" -> translateWithBing(text, targetLang)
+				else -> text
+			}
+		} catch (e: Exception) {
+			text
+		}
+	}
+
+	private suspend fun translateWithGoogle(text: String, targetLang: String): String {
+		val encodedText = URLEncoder.encode(text, "UTF-8")
+		val url = "https://translate.google.com/m?sl=auto&tl=$targetLang&q=$encodedText"
+
+		val doc = webClient.httpGet(url).parseHtml()
+		return doc.selectFirst("div.result-container")?.text() ?: text
+	}
+
+	private suspend fun translateWithBing(text: String, targetLang: String): String {
+		val encodedText = text.urlEncoded()
+		val url = "https://www.bing.com/translator/?text=$encodedText&from=auto-detect&to=$targetLang"
+
+		val doc = webClient.httpGet(url).parseHtml()
+		return doc.selectFirst("textarea#tta_output_ta")?.text() ?: text
+	}
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
 		val pages = super.getPages(chapter)
@@ -35,6 +111,8 @@ internal class Manhuarm(context: MangaLoaderContext) :
 			val imageUrl = pageData.getString("image")
 			val texts = pageData.getJSONArray("texts").mapJSON { dialogue ->
 				val box = dialogue.getJSONArray("box")
+				val originalText = dialogue.getString("text")
+				val translatedText = translateText(originalText)
 				MangaPageText(
 					rect = Rect(
 						left = box.getInt(0),
@@ -42,7 +120,7 @@ internal class Manhuarm(context: MangaLoaderContext) :
 						right = box.getInt(0) + box.getInt(2),
 						bottom = box.getInt(1) + box.getInt(3),
 					),
-					text = dialogue.getString("text"),
+					text = translatedText,
 				)
 			}
 			imageUrl to texts

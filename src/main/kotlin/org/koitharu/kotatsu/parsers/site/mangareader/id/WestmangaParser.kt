@@ -112,7 +112,8 @@ internal class WestmangaParser(context: MangaLoaderContext) :
 		val slug = manga.url.removeSurrounding("/manga/", "/")
 		val url = "https://$apiDomain/api/comic/$slug".toHttpUrl()
 
-		val data = webClient.httpGet(url, createApiHeaders(url)).parseJson()
+		val response = webClient.httpGet(url, createApiHeaders(url)).parseJson()
+		val data = response.getJSONObject("data")
 
 		val tags = buildSet {
 			when (data.getStringOrNull("country_id") ?: data.getStringOrNull("country")) {
@@ -126,9 +127,11 @@ internal class WestmangaParser(context: MangaLoaderContext) :
 			data.optJSONArray("genres")?.let { genres ->
 				for (i in 0 until genres.length()) {
 					val genre = genres.getJSONObject(i)
+					val name = genre.getString("name")
+					val slug = genre.getStringOrNull("slug")?.takeIf { it.isNotEmpty() } ?: name
 					add(MangaTag(
-						title = genre.getString("name"),
-						key = genre.getStringOrNull("slug") ?: genre.getString("name"),
+						title = name,
+						key = slug,
 						source = source,
 					))
 				}
@@ -136,7 +139,7 @@ internal class WestmangaParser(context: MangaLoaderContext) :
 		}
 
 		val description = buildString {
-			data.getStringOrNull("synopsis")?.let { synopsis ->
+			data.getStringOrNull("sinopsis")?.let { synopsis ->
 				append(org.jsoup.Jsoup.parseBodyFragment(synopsis).wholeText().trim())
 			}
 			data.getStringOrNull("alternative_name")?.let { alt ->

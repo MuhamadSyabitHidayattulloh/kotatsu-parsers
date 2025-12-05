@@ -1,5 +1,8 @@
 package org.koitharu.kotatsu.parsers.site.mangareader.id
 
+import androidx.collection.ArrayMap
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
@@ -23,6 +26,9 @@ internal class WestmangaParser(context: MangaLoaderContext) :
 	private val accessKey = "WM_WEB_FRONT_END"
 	private val secretKey = "xxxoidj"
 
+	private var genresCache: Set<MangaTag>? = null
+	private val mutex = Mutex()
+
 	override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
 		super.onCreateConfig(keys)
 		keys.add(userAgentKey)
@@ -42,6 +48,7 @@ internal class WestmangaParser(context: MangaLoaderContext) :
 		)
 
 	override suspend fun getFilterOptions() = MangaListFilterOptions(
+		availableTags = fetchGenres(),
 		availableStates = EnumSet.of(MangaState.ONGOING, MangaState.FINISHED, MangaState.PAUSED),
 		availableContentTypes = EnumSet.of(
 			ContentType.MANGA,
@@ -65,6 +72,10 @@ internal class WestmangaParser(context: MangaLoaderContext) :
 				SortOrder.ALPHABETICAL -> addQueryParameter("sort", "title")
 				SortOrder.NEWEST -> addQueryParameter("sort", "created_at")
 				else -> {}
+			}
+
+			filter.tags.forEach { tag ->
+				addQueryParameter("genre[]", tag.key)
 			}
 
 			filter.states.oneOrThrowIfMany()?.let {
@@ -204,6 +215,25 @@ internal class WestmangaParser(context: MangaLoaderContext) :
 			)
 		}
 		return pages
+	}
+
+	private suspend fun fetchGenres(): Set<MangaTag> = mutex.withLock {
+		genresCache?.let { return@withLock it }
+
+		val url = "https://$apiDomain/api/contents/genres".toHttpUrl()
+		val response = webClient.httpGet(url, createApiHeaders(url)).parseJson()
+		val genresArray = response.getJSONArray("data")
+
+		val genres = genresArray.mapJSONToSet { genreObj ->
+			MangaTag(
+				title = genreObj.getString("name"),
+				key = genreObj.getInt("id").toString(),
+				source = source,
+			)
+		}
+
+		genresCache = genres
+		return@withLock genres
 	}
 
 	private fun createApiHeaders(url: okhttp3.HttpUrl): Headers {

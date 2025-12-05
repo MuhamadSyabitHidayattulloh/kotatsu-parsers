@@ -36,8 +36,8 @@ public sealed class ConfigKey<T>(
 	) : ConfigKey<String?>("img_server")
 
 	public class TextOverlayFontSize(
-		override val defaultValue: Int,
-	) : ConfigKey<Int>("text_overlay_font_size")
+		override val defaultValue: String,
+	) : ConfigKey<String>("text_overlay_font_size")
 
 	public class TranslatorModel(
 		public val presetValues: Map<String, String>,

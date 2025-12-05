@@ -50,7 +50,7 @@ internal class Manhuarm(context: MangaLoaderContext) :
 	)
 
 	private val textOverlayFontSizeKey = ConfigKey.TextOverlayFontSize(
-		defaultValue = 32,
+		defaultValue = "32",
 	)
 
 	override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {

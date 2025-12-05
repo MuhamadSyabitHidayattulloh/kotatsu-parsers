@@ -18,11 +18,13 @@ internal class Manhuarm(context: MangaLoaderContext) :
 	override val sourceLocale: Locale = Locale.ENGLISH
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
+		val fullUrl = chapter.url.toAbsoluteUrl(domain)
+		val doc = webClient.httpGet(fullUrl).parseHtml()
 		val pages = super.getPages(chapter)
-		val chapterId = Regex("""\d+""").findAll(pages.firstOrNull()?.url.orEmpty()).lastOrNull()?.value ?: return pages
+		val chapterId = doc.selectFirst("#wp-manga-current-chap")?.attr("data-id") ?: return pages
 		
 		return try {
-			val jsonArray = webClient.httpGet("https://$domain/wp-content/uploads/ocr-data/$chapterId.json").parseJsonArray()
+			val jsonArray = JSONArray(webClient.httpGet("https://$domain/wp-content/uploads/ocr-data/$chapterId.json").parseJson())
 			pages.mapIndexed { index, page ->
 				if (index >= jsonArray.length()) return@mapIndexed page
 				val texts = jsonArray.getJSONObject(index).optJSONArray("texts")?.let { arr ->

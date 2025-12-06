@@ -92,7 +92,7 @@ internal class Manhuarm(context: MangaLoaderContext) :
 		val url = "https://www.bing.com/translator/?text=$encodedText&from=auto-detect&to=$targetLang"
 
 		val doc = webClient.httpGet(url).parseHtml()
-		return doc.selectFirst("textarea#tta_output_ta")?.text() ?: text
+		return doc.selectFirst("div#tta_output_ta")?.text() ?: text
 	}
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {

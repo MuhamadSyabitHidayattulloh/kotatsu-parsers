@@ -26,6 +26,7 @@ internal class Manhuarm(context: MangaLoaderContext) :
 		presetValues = mapOf(
 			"google" to "Google Translate",
 			"bing" to "Bing Translator",
+			"deepl" to "Deepl Translator",
 		),
 		defaultValue = "google",
 	)
@@ -72,6 +73,7 @@ internal class Manhuarm(context: MangaLoaderContext) :
 			when (model) {
 				"google" -> translateWithGoogle(text, targetLang)
 				"bing" -> translateWithBing(text, targetLang)
+				"deepl" -> translateWithDeepl(text, targetLang)
 				else -> text
 			}
 		} catch (e: Exception) {
@@ -93,6 +95,14 @@ internal class Manhuarm(context: MangaLoaderContext) :
 
 		val doc = webClient.httpGet(url).parseHtml()
 		return doc.selectFirst("textarea#tta_output_ta")?.text() ?: text
+	}
+
+	private suspend fun translateWithDeepl(text: String, targetLang: String): String {
+		val encodedText = text.urlEncoded()
+		val url = "https://www.deepl.com/translator#auto/$targetLang/$encodedText"
+
+		val doc = webClient.httpGet(url).parseHtml()
+		return doc.selectFirst("div[aria-labelledby=\"translation-target-heading\"]")?.text() ?: text
 	}
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {

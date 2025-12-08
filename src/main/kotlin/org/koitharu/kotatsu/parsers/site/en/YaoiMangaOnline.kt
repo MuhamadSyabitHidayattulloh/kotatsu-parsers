@@ -40,6 +40,11 @@ internal class YaoiMangaOnline(context: MangaLoaderContext) :
 
 	private val chapterNumberRegex = Regex("""(\d+(?:\.\d+)?)""")
 
+    override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
+        super.onCreateConfig(keys)
+        keys.add(ConfigKey.DisableUpdateChecking(defaultValue = true))
+    }
+
 	private val cloudflareMessage = "Cloudflare verification is required. Open the source in the in-app browser, complete the check, then try again."
 
 	override val availableSortOrders: Set<SortOrder> = EnumSet.of(SortOrder.RELEVANCE)

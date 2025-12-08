@@ -205,6 +205,7 @@ internal abstract class MangaFireParser(
     override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
         super.onCreateConfig(keys)
         keys.add(userAgentKey)
+        keys.add(ConfigKey.DisableUpdateChecking(defaultValue = true))
     }
 
     override val authUrl: String

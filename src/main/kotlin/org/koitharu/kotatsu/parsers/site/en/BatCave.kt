@@ -55,6 +55,7 @@ internal class BatCave(context: MangaLoaderContext) :
 	override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
 		super.onCreateConfig(keys)
 		keys.add(userAgentKey)
+        keys.add(ConfigKey.DisableUpdateChecking(defaultValue = true))
 	}
 
 	override val availableSortOrders: Set<SortOrder> = EnumSet.of(SortOrder.UPDATED)

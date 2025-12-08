@@ -19,11 +19,6 @@ internal class MangaLivre(context: MangaLoaderContext) :
     override val withoutAjax = true
     override val stylePage = ""
 
-    override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
-        super.onCreateConfig(keys)
-        keys.add(ConfigKey.DisableUpdateChecking(defaultValue = true))
-    }
-
     override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()
         .apply {
             // Add CloudFlare clearance cookies and manga_secure_x for cover images

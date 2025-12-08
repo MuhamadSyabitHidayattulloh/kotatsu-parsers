@@ -507,29 +507,63 @@ internal class MangaLivre(context: MangaLoaderContext) :
     }
 
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-        // Get all cookies including CloudFlare and manga_secure_x
-        val cookies = context.cookieJar.getCookies(domain)
-        val cookieString = cookies.joinToString("; ") { "${it.name}=${it.value}" }
+        val fullUrl = chapter.url.toAbsoluteUrl(domain)
 
-        // Check if manga_secure_x cookie exists
-        val hasMangaSecure = cookies.any { it.name == "manga_secure_x" }
-        if (!hasMangaSecure) {
-            throw ParseException(
-                "Missing manga_secure_x cookie. Please open this chapter in the webview to get the latest cookie.",
-                chapter.url.toAbsoluteUrl(domain),
+        val script = """
+            (() => {
+                const title = document.title.toLowerCase();
+
+                const hasBlockedTitle = title.includes('access denied') || title.includes('just a moment');
+                const hasCloudflareChallenge = document.querySelector('div.cf-wrapper') !== null ||
+                    document.querySelector('div[class*="cf-"]') !== null ||
+                    document.querySelector('script[src*="challenge-platform"]') !== null ||
+                    document.querySelector('form[action*="__cf_chl"]') !== null;
+
+                if (hasBlockedTitle || hasCloudflareChallenge) {
+                    return "CLOUDFLARE_BLOCKED";
+                }
+
+                const hasChapterImages = document.querySelector('#chapter-images-render img.wp-manga-chapter-img') !== null ||
+                    document.querySelector('.wp-manga-chapter-img') !== null ||
+                    document.querySelector('.reading-content img') !== null;
+
+                if (hasChapterImages) {
+                    window.stop();
+                    const elementsToRemove = document.querySelectorAll('script[src], iframe, object, embed');
+                    elementsToRemove.forEach(el => el.remove());
+                    return document.documentElement.outerHTML;
+                }
+                return null;
+            })();
+        """.trimIndent()
+
+        val rawHtml = context.evaluateJs(fullUrl, script, 30000L)
+            ?: throw ParseException(
+                "Failed to load chapter page. Please open this chapter in the webview to refresh your cookies.",
+                fullUrl
             )
+
+        val html = rawHtml.let { raw ->
+            val unquoted = if (raw.startsWith("\"") && raw.endsWith("\"")) {
+                raw.substring(1, raw.length - 1)
+                    .replace("\\\"", "\"")
+                    .replace("\\n", "\n")
+                    .replace("\\r", "\r")
+                    .replace("\\t", "\t")
+            } else raw
+
+            unquoted.replace(Regex("""\\u([0-9A-Fa-f]{4})""")) { match ->
+                val hexValue = match.groupValues[1]
+                hexValue.toInt(16).toChar().toString()
+            }
         }
 
-        val headers = getRequestHeaders().newBuilder()
-            .apply {
-                if (cookieString.isNotEmpty()) {
-                    set("Cookie", cookieString)
-                }
-            }
-            .build()
+        if (html == "CLOUDFLARE_BLOCKED") {
+            context.requestBrowserAction(this, fullUrl)
+            throw ParseException("Cloudflare challenge detected", fullUrl)
+        }
 
-        val fullUrl = chapter.url.toAbsoluteUrl(domain)
-        val doc = webClient.httpGet(fullUrl, headers).parseHtml()
+        val doc = Jsoup.parse(html, fullUrl)
 
         if (doc.selectFirst(selectRequiredLogin) != null) {
             throw AuthRequiredException(source)
@@ -538,7 +572,7 @@ internal class MangaLivre(context: MangaLoaderContext) :
         val root = doc.body().selectFirst(selectBodyPage)
         if (root == null) {
             throw ParseException(
-                "No pages found. Please open this chapter in the webview to refresh your manga_secure_x cookie.",
+                "No pages found. Please open this chapter in the webview to refresh your cookies.",
                 fullUrl,
             )
         }
@@ -557,7 +591,7 @@ internal class MangaLivre(context: MangaLoaderContext) :
 
         if (pages.isEmpty()) {
             throw ParseException(
-                "No pages found. Please open this chapter in the webview to refresh your manga_secure_x cookie.",
+                "No pages found. Please open this chapter in the webview to refresh your cookies.",
                 fullUrl,
             )
         }

@@ -4,6 +4,7 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaSourceParser
+import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.exception.AuthRequiredException
 import org.koitharu.kotatsu.parsers.exception.ParseException
 import org.koitharu.kotatsu.parsers.model.*
@@ -17,6 +18,11 @@ internal class MangaLivre(context: MangaLoaderContext) :
     override val datePattern = "MMMM dd, yyyy"
     override val withoutAjax = true
     override val stylePage = ""
+
+    override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
+        super.onCreateConfig(keys)
+        keys.add(ConfigKey.DisableUpdateChecking(defaultValue = true))
+    }
 
     override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()
         .apply {

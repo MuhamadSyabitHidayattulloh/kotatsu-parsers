@@ -20,12 +20,13 @@ internal class MangaLivre(context: MangaLoaderContext) :
 
     override fun getRequestHeaders() = super.getRequestHeaders().newBuilder()
         .apply {
-            // Add CloudFlare clearance cookies for cover images
+            // Add CloudFlare clearance cookies and manga_secure_x for cover images
             val cookies = context.cookieJar.getCookies(domain)
             val cookieString = cookies.filter { cookie ->
                 cookie.name == "cf_clearance" ||
                 cookie.name.startsWith("__cf") ||
-                cookie.name.startsWith("cf_")
+                cookie.name.startsWith("cf_") ||
+                cookie.name == "manga_secure_x"
             }.joinToString("; ") { "${it.name}=${it.value}" }
 
             if (cookieString.isNotEmpty()) {
@@ -506,12 +507,18 @@ internal class MangaLivre(context: MangaLoaderContext) :
     }
 
     override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {
-        // Set the manga reading pass cookie for chapter access
-        context.cookieJar.insertCookies(domain, "manga_reading_ml=verified")
-
-        // Get all cookies including CloudFlare and reading pass cookies
+        // Get all cookies including CloudFlare and manga_secure_x
         val cookies = context.cookieJar.getCookies(domain)
         val cookieString = cookies.joinToString("; ") { "${it.name}=${it.value}" }
+
+        // Check if manga_secure_x cookie exists
+        val hasMangaSecure = cookies.any { it.name == "manga_secure_x" }
+        if (!hasMangaSecure) {
+            throw ParseException(
+                "Missing manga_secure_x cookie. Please open this chapter in the webview to get the latest cookie.",
+                chapter.url.toAbsoluteUrl(domain),
+            )
+        }
 
         val headers = getRequestHeaders().newBuilder()
             .apply {
@@ -528,12 +535,15 @@ internal class MangaLivre(context: MangaLoaderContext) :
             throw AuthRequiredException(source)
         }
 
-        val root = doc.body().selectFirst(selectBodyPage) ?: throw ParseException(
-            "No image found, try to log in",
-            fullUrl,
-        )
+        val root = doc.body().selectFirst(selectBodyPage)
+        if (root == null) {
+            throw ParseException(
+                "No pages found. Please open this chapter in the webview to refresh your manga_secure_x cookie.",
+                fullUrl,
+            )
+        }
 
-        return root.select(selectPage).flatMap { div ->
+        val pages = root.select(selectPage).flatMap { div ->
             div.selectOrThrow("img").map { img ->
                 val url = img.requireSrc().toRelativeUrl(domain)
                 MangaPage(
@@ -544,5 +554,14 @@ internal class MangaLivre(context: MangaLoaderContext) :
                 )
             }
         }
+
+        if (pages.isEmpty()) {
+            throw ParseException(
+                "No pages found. Please open this chapter in the webview to refresh your manga_secure_x cookie.",
+                fullUrl,
+            )
+        }
+
+        return pages
     }
 }

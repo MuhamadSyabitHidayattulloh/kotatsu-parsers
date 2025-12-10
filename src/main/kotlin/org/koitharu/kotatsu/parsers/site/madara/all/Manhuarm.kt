@@ -9,18 +9,21 @@ import org.koitharu.kotatsu.parsers.model.MangaPage
 import org.koitharu.kotatsu.parsers.model.MangaPageText
 import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.koitharu.kotatsu.parsers.site.madara.MadaraParser
-import org.koitharu.kotatsu.parsers.util.parseHtml
-import org.koitharu.kotatsu.parsers.util.toAbsoluteUrl
+import org.koitharu.kotatsu.parsers.site.madara.all.translator.BingTranslator
+import org.koitharu.kotatsu.parsers.site.madara.all.translator.GoogleTranslator
 import org.koitharu.kotatsu.parsers.util.json.mapJSON
 import org.koitharu.kotatsu.parsers.util.json.toJSONArrayOrNull
-import org.koitharu.kotatsu.parsers.util.urlEncoded
-import java.net.URLEncoder
+import org.koitharu.kotatsu.parsers.util.parseHtml
+import org.koitharu.kotatsu.parsers.util.toAbsoluteUrl
 import java.util.Locale
 
 @MangaSourceParser("MANHUARM", "Manhuarm", "")
 internal class Manhuarm(context: MangaLoaderContext) :
 	MadaraParser(context, MangaParserSource.MANHUARM, "manhuarmmtl.com") {
 	override val sourceLocale: Locale = Locale.ENGLISH
+
+	private val bingTranslator by lazy { BingTranslator(webClient, domain) }
+	private val googleTranslator by lazy { GoogleTranslator(webClient, domain) }
 
 	private val translatorModelKey = ConfigKey.TranslatorModel(
 		presetValues = mapOf(
@@ -49,15 +52,10 @@ internal class Manhuarm(context: MangaLoaderContext) :
 		defaultValue = "en",
 	)
 
-	private val textOverlayFontSizeKey = ConfigKey.TextOverlayFontSize(
-		defaultValue = "32",
-	)
-
 	override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
 		super.onCreateConfig(keys)
 		keys.add(translatorModelKey)
 		keys.add(translatorLanguageKey)
-		keys.add(textOverlayFontSizeKey)
 	}
 
 	private suspend fun translateText(text: String): String {
@@ -68,31 +66,11 @@ internal class Manhuarm(context: MangaLoaderContext) :
 
 		val model = config[translatorModelKey]
 
-		return try {
-			when (model) {
-				"google" -> translateWithGoogle(text, targetLang)
-				"bing" -> translateWithBing(text, targetLang)
-				else -> text
-			}
-		} catch (e: Exception) {
-			text
+		return when (model) {
+			"google" -> googleTranslator.translate("auto", targetLang, text)
+			"bing" -> bingTranslator.translate("auto-detect", targetLang, text)
+			else -> text
 		}
-	}
-
-	private suspend fun translateWithGoogle(text: String, targetLang: String): String {
-		val encodedText = URLEncoder.encode(text, "UTF-8")
-		val url = "https://translate.google.com/m?sl=auto&tl=$targetLang&q=$encodedText"
-
-		val doc = webClient.httpGet(url).parseHtml()
-		return doc.selectFirst("div.result-container")?.text() ?: text
-	}
-
-	private suspend fun translateWithBing(text: String, targetLang: String): String {
-		val encodedText = text.urlEncoded()
-		val url = "https://www.bing.com/translator/?text=$encodedText&from=auto-detect&to=$targetLang"
-
-		val doc = webClient.httpGet(url).parseHtml()
-		return doc.selectFirst("textarea#tta_output_ta")?.text() ?: text
 	}
 
 	override suspend fun getPages(chapter: MangaChapter): List<MangaPage> {

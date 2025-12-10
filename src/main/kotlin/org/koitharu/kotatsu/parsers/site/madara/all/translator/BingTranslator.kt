@@ -1,9 +1,8 @@
 package org.koitharu.kotatsu.parsers.site.madara.all.translator
 
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import org.koitharu.kotatsu.parsers.network.WebClient
 import org.koitharu.kotatsu.parsers.util.parseHtml
+import org.koitharu.kotatsu.parsers.util.parseJsonArray
 
 internal class BingTranslator(
 	private val webClient: WebClient,
@@ -37,9 +36,11 @@ internal class BingTranslator(
 
 	private suspend fun fetchTranslatedText(requestData: TranslatorRequestData): String {
 		val response = webClient.httpPost(requestData.url, requestData.form)
-		val json = Json { ignoreUnknownKeys = true }
-		val result = json.decodeFromString<List<TranslateDto>>(response.body.string())
-		return result.firstOrNull()?.text ?: throw Exception("Translation failed")
+		val jsonArray = response.parseJsonArray()
+		return jsonArray.getJSONObject(0).getString("translations")
+			.let { org.json.JSONArray(it) }
+			.getJSONObject(0)
+			.getString("text")
 	}
 
 	private suspend fun refreshTokens(): Boolean {
@@ -102,11 +103,6 @@ internal class BingTranslator(
 	private data class TranslatorRequestData(
 		val url: String,
 		val form: Map<String, String>,
-	)
-
-	@Serializable
-	private data class TranslateDto(
-		val text: String,
 	)
 
 	companion object {
